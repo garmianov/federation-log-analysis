@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "federation-analysis": {
+      "command": "python",
+      "args": [
+        "/path/to/federation_log_analysis/federation_mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/path/to/federation_log_analysis"
+      }
+    }
+  }
+}
