@@ -1051,6 +1051,49 @@ class FederationLogAnalyzer:
 
         print(f"  Processed {self.files_processed} files, {self.lines_processed:,} lines")
 
+    def process_log_file(self, log_path: str):
+        """Process a single .log file directly (unzipped)."""
+        print(f"\nProcessing: {os.path.basename(log_path)}")
+
+        try:
+            with open(log_path, 'r', encoding='utf-8-sig', errors='replace') as f:
+                content = f.read()
+                self.process_log_content(content)
+                self.files_processed += 1
+            print(f"  Processed {self.lines_processed:,} lines")
+        except Exception as e:
+            print(f"  Error processing file: {e}")
+
+    def process_log_directory(self, dir_path: str):
+        """Process all .log files in a directory."""
+        print(f"\nProcessing directory: {dir_path}")
+
+        log_files = []
+        for root, dirs, files in os.walk(dir_path):
+            for f in files:
+                if f.endswith('.log') and ('SBUXSCRoleGroup' in f or 'Federation' in f):
+                    log_files.append(os.path.join(root, f))
+
+        if not log_files:
+            # If no specific federation logs found, try all .log files
+            for root, dirs, files in os.walk(dir_path):
+                for f in files:
+                    if f.endswith('.log'):
+                        log_files.append(os.path.join(root, f))
+
+        print(f"  Found {len(log_files)} log files")
+
+        for log_file in sorted(log_files):
+            try:
+                with open(log_file, 'r', encoding='utf-8-sig', errors='replace') as f:
+                    content = f.read()
+                    self.process_log_content(content)
+                    self.files_processed += 1
+            except Exception as e:
+                print(f"    Error processing {os.path.basename(log_file)}: {e}")
+
+        print(f"  Processed {self.files_processed} files, {self.lines_processed:,} lines")
+
     def analyze_anomalies(self) -> Dict:
         """Use ensemble ML methods to detect anomalous stores."""
         if not HAS_SKLEARN or len(self.store_stats) < 10:
@@ -1685,31 +1728,63 @@ def main():
     print("Federation Log AI Analyzer")
     print("=" * 50)
 
-    # Find ZIP files in Downloads
-    downloads = os.path.expanduser("~/Downloads")
-    zip_files = []
-
-    for f in os.listdir(downloads):
-        if f.endswith('.zip') and ('Fed' in f or 'Base' in f):
-            zip_files.append(os.path.join(downloads, f))
-
-    if not zip_files:
-        print("No federation log ZIP files found in ~/Downloads")
-        print("Looking for files matching: *Fed*.zip or *Base*.zip")
-        sys.exit(1)
-
-    # Sort by modification time (newest first)
-    zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-
-    print(f"\nFound {len(zip_files)} federation log files:")
-    for f in zip_files:
-        size_mb = os.path.getsize(f) / (1024 * 1024)
-        print(f"  {os.path.basename(f)} ({size_mb:.1f} MB)")
-
     analyzer = FederationLogAnalyzer()
 
-    for zip_file in zip_files:
-        analyzer.process_nested_zip(zip_file)
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            path = os.path.expanduser(arg)
+            if os.path.isfile(path):
+                if path.endswith('.zip'):
+                    analyzer.process_nested_zip(path)
+                elif path.endswith('.log'):
+                    analyzer.process_log_file(path)
+                else:
+                    print(f"Unsupported file type: {path}")
+            elif os.path.isdir(path):
+                analyzer.process_log_directory(path)
+            else:
+                print(f"Path not found: {path}")
+    else:
+        # Auto-discover files in Downloads
+        downloads = os.path.expanduser("~/Downloads")
+        zip_files = []
+        log_files = []
+
+        for f in os.listdir(downloads):
+            full_path = os.path.join(downloads, f)
+            if f.endswith('.zip') and ('Fed' in f or 'Base' in f):
+                zip_files.append(full_path)
+            elif f.endswith('.log') and ('SBUXSCRoleGroup' in f or 'Federation' in f):
+                log_files.append(full_path)
+
+        if not zip_files and not log_files:
+            print("No federation log files found in ~/Downloads")
+            print("Looking for: *Fed*.zip, *Base*.zip, *SBUXSCRoleGroup*.log, *Federation*.log")
+            print("\nUsage: python analyze_federation_ai.py [file.zip|file.log|directory] ...")
+            sys.exit(1)
+
+        # Sort by modification time (newest first)
+        zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+
+        if zip_files:
+            print(f"\nFound {len(zip_files)} ZIP files:")
+            for f in zip_files:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                print(f"  {os.path.basename(f)} ({size_mb:.1f} MB)")
+
+        if log_files:
+            print(f"\nFound {len(log_files)} log files:")
+            for f in log_files:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                print(f"  {os.path.basename(f)} ({size_mb:.1f} MB)")
+
+        for zip_file in zip_files:
+            analyzer.process_nested_zip(zip_file)
+
+        for log_file in log_files:
+            analyzer.process_log_file(log_file)
 
     if analyzer.events:
         analyzer.generate_report()

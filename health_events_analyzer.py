@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-Powered Federation Log Analyzer for Excel Health Stats
+AI-Powered Health Events Analyzer for Excel Health Stats
 Enhanced with Advanced ML Algorithms for Pattern Detection and Prediction.
 
 Features:
@@ -640,8 +640,8 @@ class RecommendationEngine:
         return "\n".join(lines)
 
 
-class AILogAnalyzer:
-    """Main class that orchestrates all AI analysis components."""
+class HealthEventsAnalyzer:
+    """Main class that orchestrates all AI analysis components for health events."""
 
     def __init__(self):
         self.anomaly_detector = AnomalyDetector()
@@ -657,7 +657,7 @@ class AILogAnalyzer:
         self.raw_failures = []
 
     def load_excel(self, filepath: str) -> bool:
-        """Load health history from Excel file."""
+        """Load health events from Excel file."""
         if not HAS_PANDAS:
             print("Error: pandas required for Excel loading")
             return False
@@ -1047,7 +1047,7 @@ class AILogAnalyzer:
     def generate_report(self):
         """Run all analyses and generate comprehensive report with recommendations."""
         print("\n" + "=" * 70)
-        print("AI-POWERED LOG ANALYSIS REPORT")
+        print("AI-POWERED HEALTH EVENTS ANALYSIS REPORT")
         print("Advanced ML Analysis with Predictive Analytics")
         print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 70)
@@ -1126,7 +1126,7 @@ class AILogAnalyzer:
                 print(f"  -> {rec.action}")
 
         print("\n" + "=" * 70)
-        print("END OF AI ANALYSIS REPORT")
+        print("END OF AI HEALTH EVENTS ANALYSIS REPORT")
         print("=" * 70)
 
         return {
@@ -1146,7 +1146,7 @@ class AILogAnalyzer:
 
 def main():
     """Main entry point."""
-    print("AI-Powered Federation Log Analyzer")
+    print("AI-Powered Health Events Analyzer")
     print("=" * 50)
 
     if len(sys.argv) < 2:
@@ -1165,7 +1165,7 @@ def main():
     else:
         filepath = sys.argv[1]
 
-    analyzer = AILogAnalyzer()
+    analyzer = HealthEventsAnalyzer()
     if analyzer.load_excel(filepath):
         results = analyzer.generate_report()
 
