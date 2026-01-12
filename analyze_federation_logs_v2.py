@@ -9,11 +9,11 @@ import re
 import sys
 import zipfile
 import tempfile
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
-from pathlib import Path
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configuration
 LOG_DIRS = [
@@ -43,6 +43,7 @@ class FastLogAnalyzer:
         self.errors_by_type = defaultdict(list)
         self.files_processed = 0
         self.lines_processed = 0
+        self._lock = threading.Lock()  # Thread safety for parallel processing
 
     def hash_line(self, line):
         """Fast hash for deduplication."""
@@ -58,7 +59,7 @@ class FastLogAnalyzer:
             return None
 
     def process_line(self, line, current_fed_group):
-        """Process a single log line efficiently."""
+        """Process a single log line efficiently with thread safety."""
         line = line.strip()
         if not line or line.startswith('*'):
             # Check for fed group in header
@@ -67,14 +68,15 @@ class FastLogAnalyzer:
                 return match.group(1)
             return current_fed_group
 
-        # Skip duplicates
+        # Skip duplicates (thread-safe)
         line_hash = self.hash_line(line)
-        if line_hash in self.seen_hashes:
-            return current_fed_group
-        self.seen_hashes.add(line_hash)
-        self.lines_processed += 1
+        with self._lock:
+            if line_hash in self.seen_hashes:
+                return current_fed_group
+            self.seen_hashes.add(line_hash)
+            self.lines_processed += 1
 
-        # Parse timestamp
+        # Parse timestamp (fast early bailout)
         timestamp = self.parse_timestamp_fast(line)
         if not timestamp:
             return current_fed_group
@@ -85,57 +87,75 @@ class FastLogAnalyzer:
             return current_fed_group
 
         store_id = store_match.group(1).zfill(5)
+        line_lower = line.lower()
 
         # Extract fed group from line if present
         fed_match = FED_GROUP_PATTERN.search(line)
-        if fed_match:
-            current_fed_group = fed_match.group(1)
-            self.store_fed_groups[store_id] = current_fed_group
-        elif current_fed_group and store_id not in self.store_fed_groups:
-            self.store_fed_groups[store_id] = current_fed_group
 
-        # Check for disconnect/reconnect events
-        line_lower = line.lower()
+        # Check for disconnect/reconnect events using faster string matching
+        # Check for 'initial sync context is null' first as it affects both flags
+        has_null_sync = 'initial sync context is null' in line_lower
+        is_disconnect = (has_null_sync or
+                        'logged off' in line_lower or
+                        'disconnect' in line_lower or
+                        'offline' in line_lower or
+                        'connection failed' in line_lower or
+                        'connection attempt failed' in line_lower)
 
-        is_disconnect = any(ind in line_lower for ind in DISCONNECT_INDICATORS)
-        is_reconnect = any(ind in line_lower for ind in RECONNECT_INDICATORS) and 'Initial sync context is null' not in line
+        is_reconnect = (not has_null_sync and
+                       ('logon' in line_lower or
+                        'sync complete' in line_lower or
+                        'connected successfully' in line_lower or
+                        'scheduling reconnection' in line_lower))
 
-        if is_disconnect:
-            self.store_disconnects[store_id].append((timestamp, 'disconnect', line[:200]))
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            self.timeline[hour_key]['disconnects'] += 1
-            self.timeline[hour_key]['stores'].add(store_id)
-
-        if is_reconnect and not is_disconnect:
-            self.store_disconnects[store_id].append((timestamp, 'reconnect', line[:200]))
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            self.timeline[hour_key]['reconnects'] += 1
-
-        # Check for errors/warnings
-        if ERROR_PATTERN.search(line) or EXCEPTION_PATTERN.search(line):
+        # Determine error type using faster string checks
+        error_type = None
+        if '(Warning)' in line:
+            error_type = 'warning'
+        elif '(Fatal)' in line:
+            error_type = 'fatal'
+        elif '(Error)' in line:
             error_type = 'error'
-            if '(Warning)' in line:
-                error_type = 'warning'
-            elif '(Fatal)' in line:
-                error_type = 'fatal'
-            elif 'Exception' in line:
-                error_type = 'exception'
-            self.errors_by_type[error_type].append({
-                'timestamp': timestamp,
-                'store': store_id,
-                'line': line[:300]
-            })
+        elif 'Exception' in line:
+            error_type = 'exception'
+
+        # Thread-safe updates to shared data structures
+        with self._lock:
+            if fed_match:
+                current_fed_group = fed_match.group(1)
+                self.store_fed_groups[store_id] = current_fed_group
+            elif current_fed_group and store_id not in self.store_fed_groups:
+                self.store_fed_groups[store_id] = current_fed_group
+
+            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+
+            if is_disconnect:
+                self.store_disconnects[store_id].append((timestamp, 'disconnect', line[:200]))
+                self.timeline[hour_key]['disconnects'] += 1
+                self.timeline[hour_key]['stores'].add(store_id)
+
+            if is_reconnect and not is_disconnect:
+                self.store_disconnects[store_id].append((timestamp, 'reconnect', line[:200]))
+                self.timeline[hour_key]['reconnects'] += 1
+
+            if error_type:
+                self.errors_by_type[error_type].append({
+                    'timestamp': timestamp,
+                    'store': store_id,
+                    'line': line[:300]
+                })
 
         return current_fed_group
 
     def process_file(self, filepath):
-        """Process a single log file."""
+        """Process a single log file (thread-safe)."""
         current_fed_group = None
         try:
             with open(filepath, 'r', encoding='utf-8-sig', errors='replace') as f:
                 for line in f:
                     current_fed_group = self.process_line(line, current_fed_group)
-            self.files_processed += 1
+            with self._lock:
+                self.files_processed += 1
         except Exception as e:
             print(f"  Error reading {os.path.basename(filepath)}: {e}", file=sys.stderr)
 
@@ -154,10 +174,10 @@ class FastLogAnalyzer:
         except Exception as e:
             print(f"  Error processing zip {os.path.basename(zip_path)}: {e}", file=sys.stderr)
 
-    def scan_all(self):
-        """Scan all log directories."""
+    def scan_all(self, max_workers=4):
+        """Scan all log directories with parallel processing."""
         print("=" * 80, flush=True)
-        print("SCANNING LOG DIRECTORIES", flush=True)
+        print("SCANNING LOG DIRECTORIES (Parallel)", flush=True)
         print("=" * 80, flush=True)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -169,22 +189,25 @@ class FastLogAnalyzer:
                 print(f"\nScanning: {os.path.basename(log_dir)}", flush=True)
 
                 files = sorted(os.listdir(log_dir))
-                log_files = [f for f in files if f.endswith('.log')]
-                zip_files = [f for f in files if f.endswith('.zip')]
+                log_files = [os.path.join(log_dir, f) for f in files if f.endswith('.log')]
+                zip_files = [os.path.join(log_dir, f) for f in files if f.endswith('.zip')]
 
                 print(f"  {len(log_files)} .log files, {len(zip_files)} .zip files", flush=True)
 
-                # Process .log files
-                for i, fname in enumerate(log_files):
-                    self.process_file(os.path.join(log_dir, fname))
-                    if (i + 1) % 500 == 0:
-                        print(f"    Processed {i+1}/{len(log_files)} log files...", flush=True)
+                # Process .log files in parallel
+                processed = 0
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(self.process_file, fp): fp for fp in log_files}
+                    for future in as_completed(futures):
+                        processed += 1
+                        if processed % 500 == 0:
+                            print(f"    Processed {processed}/{len(log_files)} log files...", flush=True)
 
                 print(f"    Completed {len(log_files)} log files", flush=True)
 
-                # Process .zip files
-                for i, fname in enumerate(zip_files):
-                    self.process_zip(os.path.join(log_dir, fname), temp_dir)
+                # Process .zip files (sequential for temp file handling)
+                for i, filepath in enumerate(zip_files):
+                    self.process_zip(filepath, temp_dir)
                     if (i + 1) % 20 == 0:
                         print(f"    Processed {i+1}/{len(zip_files)} zip files...", flush=True)
 

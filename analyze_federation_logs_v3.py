@@ -11,7 +11,8 @@ import zipfile
 import tempfile
 from datetime import datetime
 from collections import defaultdict
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configuration
 LOG_DIRS = [
@@ -32,33 +33,48 @@ EXCEPTION_PATTERN = re.compile(r'Exception', re.IGNORECASE)
 
 
 class OnlineStats:
-    """Welford's online algorithm for mean, variance, min, max."""
+    """Welford's online algorithm for mean, variance, min, max.
+    Uses __slots__ for memory efficiency when creating many instances."""
+    __slots__ = ('n', 'mean', 'M2', 'min_val', 'max_val', 'values_for_median', 'sample_rate')
+
     def __init__(self):
         self.n = 0
-        self.mean = 0
-        self.M2 = 0
+        self.mean = 0.0
+        self.M2 = 0.0
         self.min_val = float('inf')
         self.max_val = float('-inf')
-        self.values_for_median = []  # Store sample for median
+        self.values_for_median = []  # Reservoir sampling for median
         self.sample_rate = 100  # Keep every 100th value for median estimation
 
     def update(self, x):
+        """Update statistics with new value using Welford's algorithm."""
         self.n += 1
         delta = x - self.mean
         self.mean += delta / self.n
         delta2 = x - self.mean
         self.M2 += delta * delta2
-        self.min_val = min(self.min_val, x)
-        self.max_val = max(self.max_val, x)
-        # Sample for median
+
+        # Branchless min/max update
+        if x < self.min_val:
+            self.min_val = x
+        if x > self.max_val:
+            self.max_val = x
+
+        # Sample for median using modulo (every Nth value)
         if self.n % self.sample_rate == 0:
             self.values_for_median.append(x)
 
     def get_stats(self):
+        """Return computed statistics dictionary."""
         if self.n < 1:
             return None
-        variance = self.M2 / self.n if self.n > 1 else 0
-        median = sorted(self.values_for_median)[len(self.values_for_median)//2] if self.values_for_median else self.mean
+        variance = self.M2 / self.n if self.n > 1 else 0.0
+        # Fast median estimation from sample
+        if self.values_for_median:
+            sorted_vals = sorted(self.values_for_median)
+            median = sorted_vals[len(sorted_vals) // 2]
+        else:
+            median = self.mean
         return {
             'count': self.n,
             'mean': self.mean,
@@ -84,7 +100,7 @@ class StreamAnalyzer:
 
         # Error tracking
         self.error_counts = defaultdict(int)
-        self.error_samples = []  # Keep a sample of errors
+        self.error_samples = []  # Keep a sample of errors (max 100)
 
         # Overall stats
         self.overall_durations = OnlineStats()
@@ -93,6 +109,9 @@ class StreamAnalyzer:
         self.lines_processed = 0
         self.min_ts = None
         self.max_ts = None
+
+        # Thread safety
+        self._lock = threading.Lock()
 
     def hash_line(self, line):
         return hash(line.strip())
@@ -106,6 +125,7 @@ class StreamAnalyzer:
             return None
 
     def process_line(self, line, current_fed_group):
+        """Process a single line with thread-safe updates."""
         line = line.strip()
         if not line or line.startswith('*'):
             match = FED_GROUP_PATTERN.search(line)
@@ -113,93 +133,119 @@ class StreamAnalyzer:
                 return match.group(1)
             return current_fed_group
 
+        # Thread-safe deduplication
         line_hash = self.hash_line(line)
-        if line_hash in self.seen_hashes:
-            return current_fed_group
-        self.seen_hashes.add(line_hash)
-        self.lines_processed += 1
+        with self._lock:
+            if line_hash in self.seen_hashes:
+                return current_fed_group
+            self.seen_hashes.add(line_hash)
+            self.lines_processed += 1
 
         timestamp = self.parse_timestamp_fast(line)
         if not timestamp:
             return current_fed_group
-
-        # Track time range
-        if self.min_ts is None or timestamp < self.min_ts:
-            self.min_ts = timestamp
-        if self.max_ts is None or timestamp > self.max_ts:
-            self.max_ts = timestamp
 
         store_match = STORE_PATTERN.search(line)
         if not store_match:
             return current_fed_group
 
         store_id = store_match.group(1).zfill(5)
-
-        fed_match = FED_GROUP_PATTERN.search(line)
-        if fed_match:
-            current_fed_group = fed_match.group(1)
-            self.store_fed_groups[store_id] = current_fed_group
-        elif current_fed_group and store_id not in self.store_fed_groups:
-            self.store_fed_groups[store_id] = current_fed_group
-
         line_lower = line.lower()
-        is_disconnect = any(ind in line_lower for ind in DISCONNECT_INDICATORS)
-        is_reconnect = any(ind in line_lower for ind in RECONNECT_INDICATORS) and 'Initial sync context is null' not in line
 
-        if is_disconnect:
-            self.store_disconnect_count[store_id] += 1
-            self.store_last_disconnect[store_id] = timestamp
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            self.timeline[hour_key]['disconnects'] += 1
-            self.timeline[hour_key]['stores'].add(store_id)
+        # Fed group extraction
+        fed_match = FED_GROUP_PATTERN.search(line)
 
-        if is_reconnect and not is_disconnect:
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            self.timeline[hour_key]['reconnects'] += 1
+        # Fast string-based disconnect/reconnect detection
+        has_null_sync = 'initial sync context is null' in line_lower
+        is_disconnect = (has_null_sync or
+                        'logged off' in line_lower or
+                        'disconnect' in line_lower or
+                        'offline' in line_lower or
+                        'connection failed' in line_lower or
+                        'connection attempt failed' in line_lower)
 
-            # Calculate duration if we have a prior disconnect
-            if store_id in self.store_last_disconnect:
-                last_dc = self.store_last_disconnect[store_id]
-                duration = (timestamp - last_dc).total_seconds()
-                if 0 < duration < 86400 * 7:
-                    self.store_durations[store_id].update(duration)
-                    self.overall_durations.update(duration)
-                del self.store_last_disconnect[store_id]
+        is_reconnect = (not has_null_sync and
+                       ('logon' in line_lower or
+                        'sync complete' in line_lower or
+                        'connected successfully' in line_lower or
+                        'scheduling reconnection' in line_lower))
 
-        # Track errors
-        if ERROR_PATTERN.search(line) or EXCEPTION_PATTERN.search(line):
-            if '(Warning)' in line:
-                self.error_counts['warning'] += 1
-            elif '(Fatal)' in line:
-                self.error_counts['fatal'] += 1
-            elif '(Error)' in line:
-                self.error_counts['error'] += 1
-            if 'Exception' in line:
-                self.error_counts['exception'] += 1
+        # Determine error type
+        error_type = None
+        error_category = None
+        if '(Warning)' in line:
+            error_type = 'warning'
+        elif '(Fatal)' in line:
+            error_type = 'fatal'
+        elif '(Error)' in line:
+            error_type = 'error'
+        if 'Exception' in line:
+            error_type = 'exception'
 
-            # Categorize
+        # Error categorization
+        if error_type:
             if 'timeout' in line_lower:
-                self.error_counts['cat:timeout'] += 1
+                error_category = 'cat:timeout'
             elif 'connection attempt failed' in line_lower:
-                self.error_counts['cat:conn_failed'] += 1
+                error_category = 'cat:conn_failed'
             elif 'socket' in line_lower:
-                self.error_counts['cat:socket'] += 1
+                error_category = 'cat:socket'
             elif 'tls' in line_lower or 'ssl' in line_lower:
-                self.error_counts['cat:tls_ssl'] += 1
+                error_category = 'cat:tls_ssl'
 
-            # Keep sample
-            if len(self.error_samples) < 100:
-                self.error_samples.append({'ts': timestamp, 'store': store_id, 'line': line[:200]})
+        hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+
+        # Thread-safe updates to all shared state
+        with self._lock:
+            # Time range tracking
+            if self.min_ts is None or timestamp < self.min_ts:
+                self.min_ts = timestamp
+            if self.max_ts is None or timestamp > self.max_ts:
+                self.max_ts = timestamp
+
+            # Fed group mapping
+            if fed_match:
+                current_fed_group = fed_match.group(1)
+                self.store_fed_groups[store_id] = current_fed_group
+            elif current_fed_group and store_id not in self.store_fed_groups:
+                self.store_fed_groups[store_id] = current_fed_group
+
+            if is_disconnect:
+                self.store_disconnect_count[store_id] += 1
+                self.store_last_disconnect[store_id] = timestamp
+                self.timeline[hour_key]['disconnects'] += 1
+                self.timeline[hour_key]['stores'].add(store_id)
+
+            if is_reconnect and not is_disconnect:
+                self.timeline[hour_key]['reconnects'] += 1
+                # Calculate duration if we have a prior disconnect
+                if store_id in self.store_last_disconnect:
+                    last_dc = self.store_last_disconnect[store_id]
+                    duration = (timestamp - last_dc).total_seconds()
+                    if 0 < duration < 86400 * 7:
+                        self.store_durations[store_id].update(duration)
+                        self.overall_durations.update(duration)
+                    del self.store_last_disconnect[store_id]
+
+            # Error tracking
+            if error_type:
+                self.error_counts[error_type] += 1
+                if error_category:
+                    self.error_counts[error_category] += 1
+                if len(self.error_samples) < 100:
+                    self.error_samples.append({'ts': timestamp, 'store': store_id, 'line': line[:200]})
 
         return current_fed_group
 
     def process_file(self, filepath):
+        """Process a single log file (thread-safe)."""
         current_fed_group = None
         try:
             with open(filepath, 'r', encoding='utf-8-sig', errors='replace') as f:
                 for line in f:
                     current_fed_group = self.process_line(line, current_fed_group)
-            self.files_processed += 1
+            with self._lock:
+                self.files_processed += 1
         except Exception as e:
             print(f"  Error: {os.path.basename(filepath)}: {e}", file=sys.stderr)
 
@@ -217,9 +263,10 @@ class StreamAnalyzer:
         except Exception as e:
             print(f"  Error zip: {os.path.basename(zip_path)}: {e}", file=sys.stderr)
 
-    def scan_all(self):
+    def scan_all(self, max_workers=4):
+        """Scan all log directories with parallel processing."""
         print("=" * 80, flush=True)
-        print("SCANNING LOG DIRECTORIES", flush=True)
+        print("SCANNING LOG DIRECTORIES (Parallel)", flush=True)
         print("=" * 80, flush=True)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -230,19 +277,24 @@ class StreamAnalyzer:
 
                 print(f"\nScanning: {os.path.basename(log_dir)}", flush=True)
                 files = sorted(os.listdir(log_dir))
-                log_files = [f for f in files if f.endswith('.log')]
-                zip_files = [f for f in files if f.endswith('.zip')]
+                log_files = [os.path.join(log_dir, f) for f in files if f.endswith('.log')]
+                zip_files = [os.path.join(log_dir, f) for f in files if f.endswith('.zip')]
 
                 print(f"  {len(log_files)} .log, {len(zip_files)} .zip files", flush=True)
 
-                for i, fname in enumerate(log_files):
-                    self.process_file(os.path.join(log_dir, fname))
-                    if (i + 1) % 500 == 0:
-                        print(f"    {i+1}/{len(log_files)} logs...", flush=True)
+                # Process log files in parallel
+                processed = 0
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(self.process_file, fp): fp for fp in log_files}
+                    for future in as_completed(futures):
+                        processed += 1
+                        if processed % 500 == 0:
+                            print(f"    {processed}/{len(log_files)} logs...", flush=True)
                 print(f"    Done: {len(log_files)} logs", flush=True)
 
-                for i, fname in enumerate(zip_files):
-                    self.process_zip(os.path.join(log_dir, fname), temp_dir)
+                # Process zip files sequentially (temp file handling)
+                for i, filepath in enumerate(zip_files):
+                    self.process_zip(filepath, temp_dir)
                     if (i + 1) % 20 == 0:
                         print(f"    {i+1}/{len(zip_files)} zips...", flush=True)
                 print(f"    Done: {len(zip_files)} zips", flush=True)

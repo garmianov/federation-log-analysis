@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
 Analyze specific disconnect reasons per store.
+Optimized with parallel processing and efficient pattern matching.
 """
 
 import os
 import re
 from collections import defaultdict
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 LOG_DIR = "/Users/gancho/Library/CloudStorage/OneDrive-GenetecInc/Documents/Starbucks/Federation reconnects investigations/MS58138FedLogs/logs1"
 
@@ -15,6 +18,7 @@ STORE_PATTERN = re.compile(r'Store[\s_](\d{4,5})(?:\s*\([^)]*\))?')
 TIMESTAMP_PATTERN = re.compile(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})')
 
 # Reason patterns - more specific categories
+# Using a combined approach: quick string check first, then regex for complex patterns
 REASON_PATTERNS = {
     'connection_timeout': re.compile(r'connection attempt failed.*did not properly respond after a period of time', re.I),
     'host_failed_respond': re.compile(r'connected host has failed to respond', re.I),
@@ -32,6 +36,14 @@ REASON_PATTERNS = {
     'scheduling_reconnect': re.compile(r'Scheduling reconnection with startDelay', re.I),
 }
 
+# Quick pre-filter keywords to skip lines that won't match any pattern
+QUICK_FILTER_KEYWORDS = (
+    'connection', 'respond', 'tls', 'socket', 'refused', 'network', 'ssl',
+    'handshake', 'certificate', 'cert', 'dns', 'resolution', 'resolve',
+    'proxy', 'logged off', 'sync context', 'authentication', 'login',
+    'credential', 'service', '503', '500', 'internal', 'scheduling', 'reconnection'
+)
+
 # IP address pattern
 IP_PATTERN = re.compile(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)')
 
@@ -43,6 +55,7 @@ class StoreReasonAnalyzer:
         self.store_error_samples = defaultdict(list)
         self.reason_totals = defaultdict(int)
         self.seen_lines = set()
+        self._lock = threading.Lock()  # Thread safety for parallel processing
 
     def process_file(self, filepath):
         try:
@@ -53,15 +66,17 @@ class StoreReasonAnalyzer:
             pass
 
     def process_line(self, line):
+        """Process a single line with optimized pattern matching (thread-safe)."""
         line = line.strip()
         if not line:
             return
 
-        # Skip duplicates
+        # Skip duplicates (thread-safe)
         line_hash = hash(line)
-        if line_hash in self.seen_lines:
-            return
-        self.seen_lines.add(line_hash)
+        with self._lock:
+            if line_hash in self.seen_lines:
+                return
+            self.seen_lines.add(line_hash)
 
         # Must have a store reference
         store_match = STORE_PATTERN.search(line)
@@ -69,33 +84,55 @@ class StoreReasonAnalyzer:
             return
         store_id = store_match.group(1).zfill(5)
 
-        # Extract IPs
-        for ip_match in IP_PATTERN.finditer(line):
-            ip, port = ip_match.groups()
-            self.store_ips[store_id].add(ip)
-            self.store_ports[store_id].add(port)
+        # Pre-compute lowercase once for all string checks
+        line_lower = line.lower()
 
-        # Check for each reason pattern
+        # Quick filter: skip line if it doesn't contain any relevant keywords
+        if not any(kw in line_lower for kw in QUICK_FILTER_KEYWORDS):
+            return
+
+        # Extract IPs
+        ip_matches = IP_PATTERN.findall(line)
+
+        # Check for each reason pattern (only if quick filter passed)
+        matched_reasons = []
         for reason, pattern in REASON_PATTERNS.items():
             if pattern.search(line):
+                matched_reasons.append(reason)
+
+        # Thread-safe updates
+        with self._lock:
+            # Update IP tracking
+            for ip, port in ip_matches:
+                self.store_ips[store_id].add(ip)
+                self.store_ports[store_id].add(port)
+
+            # Update reason counts
+            for reason in matched_reasons:
                 self.store_reasons[store_id][reason] += 1
                 self.reason_totals[reason] += 1
 
-                # Keep sample errors
+                # Keep sample errors (max 5 per store)
                 if len(self.store_error_samples[store_id]) < 5:
                     self.store_error_samples[store_id].append({
                         'reason': reason,
                         'line': line[:300]
                     })
 
-    def scan_logs(self):
+    def scan_logs(self, max_workers=4):
+        """Scan logs with parallel processing."""
         print("Scanning logs for store-specific disconnect reasons...\n", flush=True)
 
-        files = sorted([f for f in os.listdir(LOG_DIR) if f.endswith('.log')])
-        for i, fname in enumerate(files):
-            self.process_file(os.path.join(LOG_DIR, fname))
-            if (i + 1) % 500 == 0:
-                print(f"  {i+1}/{len(files)} files...", flush=True)
+        files = sorted([os.path.join(LOG_DIR, f) for f in os.listdir(LOG_DIR) if f.endswith('.log')])
+
+        # Process files in parallel
+        processed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self.process_file, fp): fp for fp in files}
+            for future in as_completed(futures):
+                processed += 1
+                if processed % 500 == 0:
+                    print(f"  {processed}/{len(files)} files...", flush=True)
 
         print(f"  Done: {len(files)} files\n", flush=True)
 

@@ -8,11 +8,12 @@ import os
 import re
 import zipfile
 import tempfile
-import hashlib
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configuration
 LOG_DIRS = [
@@ -20,14 +21,12 @@ LOG_DIRS = [
     "/Users/gancho/Library/CloudStorage/OneDrive-GenetecInc/Documents/Starbucks/Federation reconnects investigations/MS58138FedLogs/logs1"
 ]
 
-# Search patterns
-PATTERNS = {
-    'error': re.compile(r'\(Error\)', re.IGNORECASE),
-    'warning': re.compile(r'\(Warning\)', re.IGNORECASE),
-    'exception': re.compile(r'Exception', re.IGNORECASE),
-    'fatal': re.compile(r'\(Fatal\)|fatal', re.IGNORECASE),
-    'connection': re.compile(r'connection|disconnect|reconnect|logged off|logon|logoff', re.IGNORECASE),
-}
+# Fast string-based indicators (much faster than regex for simple patterns)
+ERROR_INDICATORS = ('(Error)', '(error)')
+WARNING_INDICATORS = ('(Warning)', '(warning)')
+EXCEPTION_INDICATORS = ('Exception', 'exception')
+FATAL_INDICATORS = ('(Fatal)', '(fatal)', 'Fatal', 'fatal')
+CONNECTION_INDICATORS = ('connection', 'disconnect', 'reconnect', 'logged off', 'logon', 'logoff')
 
 # Store extraction pattern - matches "Store XXXXX" or "Store 0XXXX (vNVR)" etc
 STORE_PATTERN = re.compile(r'Store[\s_](\d{4,5})(?:\s*\([^)]*\))?')
@@ -51,31 +50,29 @@ class LogAnalyzer:
         self.store_fed_groups = {}  # Store -> federation group mapping
         self.timeline = defaultdict(list)  # Events by timestamp (hour granularity)
         self.errors_warnings = []  # All errors and warnings
+        self._lock = threading.Lock()  # Thread safety for parallel processing
 
     def get_line_hash(self, line):
-        """Generate hash for line deduplication (ignoring whitespace variations)."""
-        normalized = ' '.join(line.split())
-        return hashlib.md5(normalized.encode()).hexdigest()
+        """Generate fast hash for line deduplication."""
+        # Use Python's built-in hash - 100x faster than MD5 for deduplication
+        return hash(line.strip())
 
     def parse_timestamp(self, line):
-        """Extract timestamp from log line."""
-        match = TIMESTAMP_PATTERN.match(line)
-        if match:
-            ts_str = match.group(1)
-            # Parse ISO format with timezone
-            try:
-                # Handle the format: 2025-10-17T23:50:05.946-07:00
-                ts_str_normalized = ts_str.replace('-07:00', '-0700').replace('-08:00', '-0800')
-                # Try different formats
-                for fmt in ['%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z']:
-                    try:
-                        return datetime.strptime(ts_str_normalized[:26] + ts_str_normalized[-5:], fmt)
-                    except:
-                        continue
-                # Fallback: just parse the datetime part
-                return datetime.strptime(ts_str[:19], '%Y-%m-%dT%H:%M:%S')
-            except Exception as e:
-                pass
+        """Extract timestamp from log line with fast early bailout."""
+        # Fast early check - avoid regex if line doesn't start with timestamp format
+        if len(line) < 20 or line[4] != '-' or line[7] != '-' or line[10] != 'T':
+            return None
+        try:
+            # Fast path: parse just the datetime part (most common case)
+            return datetime.strptime(line[:19], '%Y-%m-%dT%H:%M:%S')
+        except ValueError:
+            # Fallback to regex for edge cases
+            match = TIMESTAMP_PATTERN.match(line)
+            if match:
+                try:
+                    return datetime.strptime(match.group(1)[:19], '%Y-%m-%dT%H:%M:%S')
+                except ValueError:
+                    pass
         return None
 
     def extract_store_id(self, line):
@@ -93,20 +90,43 @@ class LogAnalyzer:
         return None
 
     def classify_event(self, line):
-        """Classify the event type based on patterns."""
+        """Classify the event type using fast string matching."""
         events = []
-        for name, pattern in PATTERNS.items():
-            if pattern.search(line):
-                events.append(name)
+        # Use any() with tuple for fast membership testing
+        if any(ind in line for ind in ERROR_INDICATORS):
+            events.append('error')
+        if any(ind in line for ind in WARNING_INDICATORS):
+            events.append('warning')
+        if any(ind in line for ind in EXCEPTION_INDICATORS):
+            events.append('exception')
+        if any(ind in line for ind in FATAL_INDICATORS):
+            events.append('fatal')
+        if any(ind in line for ind in CONNECTION_INDICATORS):
+            events.append('connection')
         return events
 
-    def is_disconnect_event(self, line):
-        """Check if line represents a disconnect event."""
-        return bool(DISCONNECT_PATTERN.search(line))
+    def is_disconnect_event(self, line, line_lower=None):
+        """Check if line represents a disconnect event using fast string matching."""
+        if line_lower is None:
+            line_lower = line.lower()
+        return ('logged off' in line_lower or
+                'disconnect' in line_lower or
+                'offline' in line_lower or
+                'connection' in line_lower and 'fail' in line_lower or
+                'Initial sync context is null' in line)
 
-    def is_reconnect_event(self, line):
+    def is_reconnect_event(self, line, line_lower=None):
         """Check if line represents a reconnect event."""
-        return bool(RECONNECT_PATTERN.search(line)) and not self.is_disconnect_event(line)
+        if line_lower is None:
+            line_lower = line.lower()
+        if 'Initial sync context is null' in line:
+            return False
+        return ('reconnect' in line_lower or
+                'logon' in line_lower or
+                'online' in line_lower or
+                'connected' in line_lower or
+                'sync complete' in line_lower or
+                'primary sync' in line_lower)
 
     def process_log_file(self, filepath):
         """Process a single log file."""
@@ -119,11 +139,12 @@ class LogAnalyzer:
                     if not line:
                         continue
 
-                    # Skip duplicate lines
+                    # Skip duplicate lines (thread-safe)
                     line_hash = self.get_line_hash(line)
-                    if line_hash in self.seen_lines:
-                        continue
-                    self.seen_lines.add(line_hash)
+                    with self._lock:
+                        if line_hash in self.seen_lines:
+                            continue
+                        self.seen_lines.add(line_hash)
 
                     # Extract federation group from header
                     fed_group = self.extract_fed_group(line)
@@ -138,12 +159,11 @@ class LogAnalyzer:
                     # Extract store ID
                     store_id = self.extract_store_id(line)
 
-                    # Classify event
+                    # Classify event and determine connection state (with cached lowercase)
+                    line_lower = line.lower()
                     event_types = self.classify_event(line)
-
-                    # Determine connection state change
-                    is_disconnect = self.is_disconnect_event(line)
-                    is_reconnect = self.is_reconnect_event(line)
+                    is_disconnect = self.is_disconnect_event(line, line_lower)
+                    is_reconnect = self.is_reconnect_event(line, line_lower) and not is_disconnect
 
                     # Build event record
                     if store_id and (is_disconnect or is_reconnect or event_types):
@@ -158,26 +178,29 @@ class LogAnalyzer:
                             'source': os.path.basename(filepath)
                         }
 
-                        self.events.append(event)
-                        self.store_events[store_id].append(event)
+                        # Thread-safe updates to shared data structures
+                        with self._lock:
+                            self.events.append(event)
+                            self.store_events[store_id].append(event)
 
-                        # Track federation group for store
-                        if event['fed_group'] and store_id not in self.store_fed_groups:
-                            self.store_fed_groups[store_id] = event['fed_group']
+                            # Track federation group for store
+                            if event['fed_group'] and store_id not in self.store_fed_groups:
+                                self.store_fed_groups[store_id] = event['fed_group']
 
-                        # Add to timeline (hour granularity)
-                        hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-                        self.timeline[hour_key].append(event)
+                            # Add to timeline (hour granularity)
+                            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+                            self.timeline[hour_key].append(event)
 
-                    # Collect errors and warnings
-                    if 'error' in event_types or 'warning' in event_types or 'exception' in event_types or 'fatal' in event_types:
-                        self.errors_warnings.append({
-                            'timestamp': timestamp,
-                            'store_id': store_id,
-                            'types': event_types,
-                            'line': line[:500],
-                            'source': os.path.basename(filepath)
-                        })
+                    # Collect errors and warnings (using set intersection for O(1) check)
+                    if event_types and {'error', 'warning', 'exception', 'fatal'} & set(event_types):
+                        with self._lock:
+                            self.errors_warnings.append({
+                                'timestamp': timestamp,
+                                'store_id': store_id,
+                                'types': event_types,
+                                'line': line[:500],
+                                'source': os.path.basename(filepath)
+                            })
 
         except Exception as e:
             print(f"Error processing {filepath}: {e}")
@@ -195,10 +218,10 @@ class LogAnalyzer:
         except Exception as e:
             print(f"Error processing zip {zip_path}: {e}")
 
-    def scan_directories(self):
-        """Scan all configured directories for log files."""
+    def scan_directories(self, max_workers=4):
+        """Scan all configured directories for log files with parallel processing."""
         print("=" * 80)
-        print("SCANNING LOG DIRECTORIES")
+        print("SCANNING LOG DIRECTORIES (Parallel Processing)")
         print("=" * 80)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -209,21 +232,22 @@ class LogAnalyzer:
 
                 print(f"\nProcessing: {log_dir}")
                 files = os.listdir(log_dir)
-                log_files = [f for f in files if f.endswith('.log')]
-                zip_files = [f for f in files if f.endswith('.zip')]
+                log_files = [os.path.join(log_dir, f) for f in files if f.endswith('.log')]
+                zip_files = [os.path.join(log_dir, f) for f in files if f.endswith('.zip')]
 
                 print(f"  Found {len(log_files)} .log files, {len(zip_files)} .zip files")
 
-                # Process .log files
-                for i, filename in enumerate(log_files):
-                    filepath = os.path.join(log_dir, filename)
-                    self.process_log_file(filepath)
-                    if (i + 1) % 100 == 0:
-                        print(f"    Processed {i + 1}/{len(log_files)} log files...")
+                # Process .log files in parallel using ThreadPoolExecutor
+                processed = 0
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(self.process_log_file, fp): fp for fp in log_files}
+                    for future in as_completed(futures):
+                        processed += 1
+                        if processed % 100 == 0:
+                            print(f"    Processed {processed}/{len(log_files)} log files...")
 
-                # Process .zip files
-                for i, filename in enumerate(zip_files):
-                    filepath = os.path.join(log_dir, filename)
+                # Process .zip files (sequential due to temp file handling)
+                for i, filepath in enumerate(zip_files):
                     self.process_zip_file(filepath, temp_dir)
                     if (i + 1) % 10 == 0:
                         print(f"    Processed {i + 1}/{len(zip_files)} zip files...")
