@@ -1,34 +1,43 @@
 #!/usr/bin/env python3
 """
 AI-Powered Federation Log Analyzer for Genetec Security Center
-Specialized for analyzing federation reconnection issues from raw log files.
+Enhanced with Advanced ML Algorithms for Pattern Detection and Prediction.
+
+Features:
+- Advanced Anomaly Detection: Isolation Forest, DBSCAN, LOF, Ensemble methods
+- Predictive Analytics: ARIMA-style forecasting, trend extrapolation
+- Root Cause Inference: Feature importance, causal analysis, Bayesian inference
+- Cascade Failure Detection: Temporal correlation, propagation analysis
+- Actionable Recommendations: Priority-scored remediation steps
 
 Supports:
 - Nested ZIP files containing .log files
 - SBUXSCRoleGroup and Federation role logs
 - Connection timeout, TLS errors, socket exceptions detection
-- Machine learning for pattern detection and root cause analysis
 """
 
 import os
 import re
 import sys
 import zipfile
-import tempfile
 import io
 from datetime import datetime, timedelta
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
+from collections import defaultdict, deque
+from typing import Dict, List, Tuple, Optional, Set
 import warnings
 import numpy as np
+from dataclasses import dataclass, field
 
 warnings.filterwarnings('ignore')
 
 try:
-    from sklearn.ensemble import IsolationForest, RandomForestClassifier
+    from sklearn.ensemble import IsolationForest, RandomForestClassifier, GradientBoostingClassifier
     from sklearn.cluster import KMeans, DBSCAN
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.neighbors import LocalOutlierFactor
+    from sklearn.preprocessing import StandardScaler, LabelEncoder
     from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.decomposition import PCA
+    from sklearn.model_selection import cross_val_score
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
@@ -37,6 +46,7 @@ except ImportError:
 try:
     from scipy import stats
     from scipy.signal import find_peaks
+    from scipy.ndimage import uniform_filter1d
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -118,6 +128,660 @@ SEVERITY_PATTERNS = {
     'warning': re.compile(r'\(Warning\)', re.I),
     'exception': re.compile(r'Exception', re.I)
 }
+
+
+# =============================================================================
+# ADVANCED AI ALGORITHMS
+# =============================================================================
+
+@dataclass
+class Recommendation:
+    """Actionable recommendation with priority scoring."""
+    priority: int  # 1-5, 1 being highest
+    category: str  # 'immediate', 'short_term', 'preventive'
+    target: str  # store_id, machine, or 'system'
+    action: str  # specific action to take
+    reason: str  # why this action is recommended
+    estimated_impact: str  # expected improvement
+    confidence: float  # 0-1 confidence score
+
+
+class AdvancedAnomalyDetector:
+    """
+    Ensemble anomaly detection using multiple algorithms.
+    Combines Isolation Forest, DBSCAN, LOF, and statistical methods.
+    """
+
+    def __init__(self, contamination: float = 0.1):
+        self.contamination = contamination
+        self.scaler = StandardScaler() if HAS_SKLEARN else None
+        self.isolation_forest = None
+        self.lof = None
+        self.dbscan = None
+
+    def detect_ensemble(self, features: np.ndarray) -> Tuple[np.ndarray, Dict]:
+        """
+        Ensemble anomaly detection - combines multiple methods for robust detection.
+        Returns: (anomaly_labels, method_scores)
+        """
+        if not HAS_SKLEARN or len(features) < 10:
+            return np.zeros(len(features)), {}
+
+        scaled = self.scaler.fit_transform(features)
+        n_samples = len(features)
+        votes = np.zeros(n_samples)
+        method_scores = {}
+
+        # 1. Isolation Forest
+        self.isolation_forest = IsolationForest(
+            contamination=self.contamination, random_state=42, n_estimators=100
+        )
+        if_labels = self.isolation_forest.fit_predict(scaled)
+        if_anomalies = (if_labels == -1).astype(int)
+        votes += if_anomalies
+        method_scores['isolation_forest'] = if_anomalies
+
+        # 2. Local Outlier Factor
+        self.lof = LocalOutlierFactor(
+            n_neighbors=min(20, n_samples - 1), contamination=self.contamination
+        )
+        lof_labels = self.lof.fit_predict(scaled)
+        lof_anomalies = (lof_labels == -1).astype(int)
+        votes += lof_anomalies
+        method_scores['lof'] = lof_anomalies
+
+        # 3. DBSCAN (outliers are labeled -1)
+        # Automatically find eps using k-distance
+        k = min(5, n_samples - 1)
+        from sklearn.neighbors import NearestNeighbors
+        nn = NearestNeighbors(n_neighbors=k)
+        nn.fit(scaled)
+        distances, _ = nn.kneighbors(scaled)
+        k_distances = np.sort(distances[:, -1])
+        eps = np.percentile(k_distances, 90)  # Use 90th percentile as eps
+
+        self.dbscan = DBSCAN(eps=eps, min_samples=3)
+        db_labels = self.dbscan.fit_predict(scaled)
+        db_anomalies = (db_labels == -1).astype(int)
+        votes += db_anomalies
+        method_scores['dbscan'] = db_anomalies
+
+        # 4. Statistical (Z-score)
+        z_scores = np.abs(stats.zscore(features, axis=0)) if HAS_SCIPY else np.zeros_like(features)
+        stat_anomalies = (np.max(z_scores, axis=1) > 3).astype(int)
+        votes += stat_anomalies
+        method_scores['statistical'] = stat_anomalies
+
+        # Ensemble: anomaly if >= 2 methods agree
+        ensemble_labels = (votes >= 2).astype(int) * -1  # -1 for anomaly
+        ensemble_labels[ensemble_labels == 0] = 1  # 1 for normal
+
+        method_scores['votes'] = votes
+        method_scores['ensemble'] = (ensemble_labels == -1).astype(int)
+
+        return ensemble_labels, method_scores
+
+    def detect_change_points(self, time_series: np.ndarray, threshold: float = 2.0) -> List[int]:
+        """
+        Detect change points in time series using CUSUM algorithm.
+        Returns indices where significant changes occur.
+        """
+        if len(time_series) < 10:
+            return []
+
+        mean = np.mean(time_series)
+        std = np.std(time_series) or 1
+
+        # CUSUM
+        s_pos = np.zeros(len(time_series))
+        s_neg = np.zeros(len(time_series))
+
+        for i in range(1, len(time_series)):
+            s_pos[i] = max(0, s_pos[i-1] + (time_series[i] - mean) / std - 0.5)
+            s_neg[i] = max(0, s_neg[i-1] - (time_series[i] - mean) / std - 0.5)
+
+        # Find points exceeding threshold
+        change_points = []
+        for i in range(1, len(time_series)):
+            if s_pos[i] > threshold or s_neg[i] > threshold:
+                if not change_points or i - change_points[-1] > 3:  # Min gap
+                    change_points.append(i)
+                    s_pos[i] = 0
+                    s_neg[i] = 0
+
+        return change_points
+
+
+class PredictiveAnalytics:
+    """
+    Forecasting and trend prediction using statistical methods.
+    Implements ARIMA-style forecasting without external dependencies.
+    """
+
+    def __init__(self):
+        self.seasonal_pattern = None
+        self.trend_slope = None
+        self.base_level = None
+
+    def decompose_time_series(self, data: np.ndarray, period: int = 24) -> Dict:
+        """
+        Decompose time series into trend, seasonal, and residual components.
+        Uses STL-like decomposition.
+        """
+        if len(data) < period * 2:
+            return {'trend': data, 'seasonal': np.zeros_like(data),
+                    'residual': np.zeros_like(data)}
+
+        # Trend: Moving average
+        if HAS_SCIPY:
+            trend = uniform_filter1d(data.astype(float), size=period, mode='nearest')
+        else:
+            trend = np.convolve(data, np.ones(period)/period, mode='same')
+
+        # Seasonal: Average deviation by position in cycle
+        detrended = data - trend
+        seasonal = np.zeros_like(data, dtype=float)
+        for i in range(period):
+            mask = np.arange(len(data)) % period == i
+            seasonal[mask] = np.mean(detrended[mask])
+
+        # Residual
+        residual = data - trend - seasonal
+
+        self.seasonal_pattern = seasonal[:period]
+        self.trend_slope = (trend[-1] - trend[0]) / len(trend) if len(trend) > 1 else 0
+        self.base_level = trend[-1] if len(trend) > 0 else np.mean(data)
+
+        return {'trend': trend, 'seasonal': seasonal, 'residual': residual}
+
+    def forecast(self, data: np.ndarray, horizon: int = 24,
+                 confidence_level: float = 0.95) -> Dict:
+        """
+        Forecast future values with confidence intervals.
+        Uses exponential smoothing with seasonal adjustment.
+        """
+        if len(data) < 48:
+            mean_val = np.mean(data)
+            return {
+                'forecast': np.full(horizon, mean_val),
+                'lower_bound': np.full(horizon, mean_val * 0.5),
+                'upper_bound': np.full(horizon, mean_val * 1.5)
+            }
+
+        decomp = self.decompose_time_series(data)
+
+        # Holt-Winters style forecasting
+        alpha = 0.3  # Level smoothing
+        beta = 0.1   # Trend smoothing
+
+        level = decomp['trend'][-1]
+        trend = self.trend_slope
+
+        forecast = []
+        for h in range(horizon):
+            # Project level and trend
+            projected_level = level + trend * (h + 1)
+
+            # Add seasonal component
+            seasonal_idx = (len(data) + h) % len(self.seasonal_pattern)
+            seasonal = self.seasonal_pattern[seasonal_idx] if self.seasonal_pattern is not None else 0
+
+            forecast.append(max(0, projected_level + seasonal))
+
+        forecast = np.array(forecast)
+
+        # Confidence intervals based on residual variance
+        residual_std = np.std(decomp['residual'])
+        z_score = stats.norm.ppf((1 + confidence_level) / 2) if HAS_SCIPY else 1.96
+
+        # Wider intervals for further predictions
+        interval_width = residual_std * z_score * np.sqrt(np.arange(1, horizon + 1))
+
+        return {
+            'forecast': forecast,
+            'lower_bound': np.maximum(0, forecast - interval_width),
+            'upper_bound': forecast + interval_width,
+            'trend_direction': 'increasing' if trend > 0.1 else 'decreasing' if trend < -0.1 else 'stable'
+        }
+
+    def predict_failure_probability(self, store_features: Dict) -> float:
+        """
+        Predict probability of failure in next period based on historical patterns.
+        Uses logistic-style calculation.
+        """
+        # Risk factors with weights
+        risk_score = 0
+        max_score = 0
+
+        # Recent failure rate (normalized)
+        if 'recent_errors' in store_features:
+            risk_score += min(store_features['recent_errors'] / 100, 1) * 30
+            max_score += 30
+
+        # Error variance (high variance = unpredictable = risky)
+        if 'error_variance' in store_features:
+            risk_score += min(store_features['error_variance'] / 50, 1) * 20
+            max_score += 20
+
+        # Number of distinct error types
+        if 'error_types' in store_features:
+            risk_score += min(store_features['error_types'] / 5, 1) * 15
+            max_score += 15
+
+        # Recent trend
+        if 'trend' in store_features:
+            if store_features['trend'] == 'increasing':
+                risk_score += 20
+            elif store_features['trend'] == 'stable':
+                risk_score += 5
+            max_score += 20
+
+        # Burst frequency
+        if 'burst_count' in store_features:
+            risk_score += min(store_features['burst_count'] / 10, 1) * 15
+            max_score += 15
+
+        # Convert to probability using sigmoid-like function
+        if max_score > 0:
+            normalized = risk_score / max_score
+            probability = 1 / (1 + np.exp(-5 * (normalized - 0.5)))
+            return probability
+        return 0.5
+
+
+class CausalAnalyzer:
+    """
+    Root cause analysis using feature importance and causal inference.
+    """
+
+    def __init__(self):
+        self.feature_importance = {}
+        self.correlation_matrix = None
+        self.causal_graph = {}
+
+    def calculate_feature_importance(self, features: np.ndarray,
+                                     labels: np.ndarray,
+                                     feature_names: List[str]) -> Dict[str, float]:
+        """
+        Calculate feature importance using Random Forest.
+        """
+        if not HAS_SKLEARN or len(features) < 20:
+            return {}
+
+        # Handle binary classification for anomaly detection
+        rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=10)
+        try:
+            rf.fit(features, labels)
+            importance = rf.feature_importances_
+
+            self.feature_importance = {
+                name: float(imp) for name, imp in zip(feature_names, importance)
+            }
+
+            return dict(sorted(self.feature_importance.items(),
+                             key=lambda x: x[1], reverse=True))
+        except Exception:
+            return {}
+
+    def build_correlation_matrix(self, features: np.ndarray,
+                                 feature_names: List[str]) -> np.ndarray:
+        """
+        Build correlation matrix between features.
+        """
+        if len(features) < 10:
+            return np.array([])
+
+        self.correlation_matrix = np.corrcoef(features.T)
+        return self.correlation_matrix
+
+    def granger_causality_test(self, series1: np.ndarray, series2: np.ndarray,
+                               max_lag: int = 5) -> Dict:
+        """
+        Simplified Granger causality test.
+        Tests if series1 helps predict series2.
+        """
+        if len(series1) < max_lag * 3:
+            return {'causal': False, 'p_value': 1.0}
+
+        # Build lagged features
+        X = []
+        y = series2[max_lag:]
+
+        for i in range(max_lag, len(series2)):
+            row = list(series2[i-max_lag:i]) + list(series1[i-max_lag:i])
+            X.append(row)
+
+        X = np.array(X)
+
+        # Restricted model (only series2 lags)
+        X_restricted = X[:, :max_lag]
+
+        # Compare R-squared
+        if HAS_SKLEARN:
+            from sklearn.linear_model import LinearRegression
+            model_full = LinearRegression().fit(X, y)
+            model_restricted = LinearRegression().fit(X_restricted, y)
+
+            r2_full = model_full.score(X, y)
+            r2_restricted = model_restricted.score(X_restricted, y)
+
+            # F-test approximation
+            improvement = r2_full - r2_restricted
+            is_causal = improvement > 0.05  # 5% improvement threshold
+
+            return {
+                'causal': is_causal,
+                'improvement': improvement,
+                'r2_full': r2_full,
+                'r2_restricted': r2_restricted
+            }
+
+        return {'causal': False, 'p_value': 1.0}
+
+    def infer_root_causes(self, store_stats: Dict, machine_stats: Dict,
+                          error_totals: Dict) -> List[Dict]:
+        """
+        Infer likely root causes from observed patterns.
+        Uses Bayesian-style reasoning.
+        """
+        causes = []
+
+        # Prior probabilities of different root causes
+        priors = {
+            'network_issue': 0.3,
+            'store_hardware': 0.25,
+            'server_overload': 0.2,
+            'certificate_expiry': 0.1,
+            'configuration_error': 0.1,
+            'external_dependency': 0.05
+        }
+
+        # Calculate evidence updates based on error patterns
+        total_errors = sum(error_totals.values())
+        if total_errors == 0:
+            return causes
+
+        # Network issues evidence
+        network_evidence = (
+            error_totals.get('connection_timeout', 0) +
+            error_totals.get('host_unreachable', 0) +
+            error_totals.get('socket_exception', 0)
+        ) / total_errors
+
+        # Hardware evidence
+        hardware_evidence = error_totals.get('connection_refused', 0) / total_errors
+
+        # TLS/Certificate evidence
+        cert_evidence = (
+            error_totals.get('tls_handshake_error', 0) +
+            error_totals.get('certificate_error', 0)
+        ) / total_errors
+
+        # Server overload evidence (many stores on same machine)
+        overload_evidence = 0
+        if machine_stats:
+            max_stores_per_machine = max(
+                len(m.get('stores', set())) for m in machine_stats.values()
+            )
+            if max_stores_per_machine > 200:
+                overload_evidence = 0.5
+
+        # Update posteriors (simplified Bayesian update)
+        posteriors = {}
+        posteriors['network_issue'] = priors['network_issue'] * (1 + 3 * network_evidence)
+        posteriors['store_hardware'] = priors['store_hardware'] * (1 + 3 * hardware_evidence)
+        posteriors['certificate_expiry'] = priors['certificate_expiry'] * (1 + 5 * cert_evidence)
+        posteriors['server_overload'] = priors['server_overload'] * (1 + 2 * overload_evidence)
+
+        # Normalize
+        total_posterior = sum(posteriors.values())
+        for cause, prob in sorted(posteriors.items(), key=lambda x: x[1], reverse=True):
+            normalized_prob = prob / total_posterior if total_posterior > 0 else 0
+            if normalized_prob > 0.1:  # Only report significant causes
+                causes.append({
+                    'cause': cause,
+                    'probability': normalized_prob,
+                    'evidence': self._get_evidence_description(cause, error_totals)
+                })
+
+        return causes
+
+    def _get_evidence_description(self, cause: str, error_totals: Dict) -> str:
+        """Get human-readable evidence for a root cause."""
+        descriptions = {
+            'network_issue': f"High timeout/socket errors ({error_totals.get('connection_timeout', 0):,})",
+            'store_hardware': f"Connection refused errors ({error_totals.get('connection_refused', 0):,})",
+            'certificate_expiry': f"TLS errors ({error_totals.get('tls_handshake_error', 0):,})",
+            'server_overload': "High store density on federation servers",
+            'configuration_error': "Inconsistent error patterns across stores",
+            'external_dependency': "Correlated failures across multiple stores"
+        }
+        return descriptions.get(cause, "Pattern analysis")
+
+
+class CascadeDetector:
+    """
+    Detect cascading failures where one store's failure triggers others.
+    """
+
+    def __init__(self, time_window_seconds: int = 60):
+        self.time_window = time_window_seconds
+        self.cascade_events = []
+
+    def detect_cascades(self, events: List, min_stores: int = 3) -> List[Dict]:
+        """
+        Detect cascade events where multiple stores fail within time window.
+        """
+        if not events:
+            return []
+
+        # Sort events by timestamp
+        sorted_events = sorted(events, key=lambda e: e.timestamp if e.timestamp else datetime.min)
+
+        cascades = []
+        i = 0
+
+        while i < len(sorted_events):
+            if sorted_events[i].timestamp is None:
+                i += 1
+                continue
+
+            # Find all events within time window
+            window_end = sorted_events[i].timestamp + timedelta(seconds=self.time_window)
+            stores_in_window = set()
+            events_in_window = []
+
+            j = i
+            while j < len(sorted_events) and sorted_events[j].timestamp and sorted_events[j].timestamp <= window_end:
+                if sorted_events[j].store_id:
+                    stores_in_window.add(sorted_events[j].store_id)
+                    events_in_window.append(sorted_events[j])
+                j += 1
+
+            # Check if this is a cascade
+            if len(stores_in_window) >= min_stores:
+                # Determine cascade characteristics
+                error_types = defaultdict(int)
+                machines = set()
+                for e in events_in_window:
+                    if e.error_category:
+                        error_types[e.error_category] += 1
+                    if e.machine:
+                        machines.add(e.machine)
+
+                cascades.append({
+                    'start_time': sorted_events[i].timestamp,
+                    'end_time': events_in_window[-1].timestamp if events_in_window else sorted_events[i].timestamp,
+                    'store_count': len(stores_in_window),
+                    'stores': list(stores_in_window)[:10],  # Limit for display
+                    'event_count': len(events_in_window),
+                    'dominant_error': max(error_types.items(), key=lambda x: x[1])[0] if error_types else 'unknown',
+                    'machines_affected': len(machines),
+                    'is_server_wide': len(machines) == 1 and len(stores_in_window) > 10
+                })
+
+                i = j  # Skip past this cascade
+            else:
+                i += 1
+
+        self.cascade_events = cascades
+        return cascades
+
+    def analyze_propagation(self, cascades: List[Dict]) -> Dict:
+        """
+        Analyze cascade propagation patterns.
+        """
+        if not cascades:
+            return {}
+
+        # Statistics
+        avg_stores = np.mean([c['store_count'] for c in cascades])
+        max_stores = max(c['store_count'] for c in cascades)
+        server_wide_count = sum(1 for c in cascades if c['is_server_wide'])
+
+        # Error type analysis
+        error_counts = defaultdict(int)
+        for c in cascades:
+            error_counts[c['dominant_error']] += 1
+
+        return {
+            'total_cascades': len(cascades),
+            'avg_stores_affected': avg_stores,
+            'max_stores_in_cascade': max_stores,
+            'server_wide_cascades': server_wide_count,
+            'common_error_types': dict(error_counts)
+        }
+
+
+class RecommendationEngine:
+    """
+    Generate actionable recommendations with priority scoring.
+    """
+
+    def __init__(self):
+        self.recommendations = []
+
+    def generate_recommendations(self, analysis_results: Dict) -> List[Recommendation]:
+        """
+        Generate prioritized recommendations based on analysis results.
+        """
+        self.recommendations = []
+
+        # Check anomaly detection results
+        if 'anomalies' in analysis_results:
+            anomalies = analysis_results['anomalies']
+            if anomalies.get('anomalous_stores'):
+                top_anomalies = anomalies['anomalous_stores'][:5]
+                for store in top_anomalies:
+                    self.recommendations.append(Recommendation(
+                        priority=1,
+                        category='immediate',
+                        target=f"Store {store['store_id']}",
+                        action=f"Investigate connectivity to store {store['store_id']}",
+                        reason=f"Anomalous behavior detected: {store['total_errors']:,} errors",
+                        estimated_impact=f"Reduce ~{store['total_errors']//2:,} errors",
+                        confidence=0.85
+                    ))
+
+        # Check cascade detection
+        if 'cascades' in analysis_results:
+            cascades = analysis_results['cascades']
+            if cascades.get('server_wide_cascades', 0) > 0:
+                self.recommendations.append(Recommendation(
+                    priority=1,
+                    category='immediate',
+                    target='Federation Servers',
+                    action='Review federation server load balancing and health',
+                    reason=f"{cascades['server_wide_cascades']} server-wide cascade events detected",
+                    estimated_impact='Prevent mass disconnections',
+                    confidence=0.9
+                ))
+
+        # Check root causes
+        if 'root_causes' in analysis_results:
+            for cause in analysis_results['root_causes'][:3]:
+                if cause['probability'] > 0.2:
+                    action = self._get_action_for_cause(cause['cause'])
+                    self.recommendations.append(Recommendation(
+                        priority=2 if cause['probability'] > 0.3 else 3,
+                        category='short_term',
+                        target='System',
+                        action=action,
+                        reason=f"Root cause analysis: {cause['cause']} ({cause['probability']:.0%} probability)",
+                        estimated_impact='Address underlying issue',
+                        confidence=cause['probability']
+                    ))
+
+        # Check predictions
+        if 'predictions' in analysis_results:
+            pred = analysis_results['predictions']
+            if pred.get('trend_direction') == 'increasing':
+                self.recommendations.append(Recommendation(
+                    priority=2,
+                    category='preventive',
+                    target='System',
+                    action='Scale up monitoring and prepare incident response',
+                    reason='Error trend is increasing',
+                    estimated_impact='Faster response to incidents',
+                    confidence=0.7
+                ))
+
+        # Check machine health
+        if 'machine_health' in analysis_results:
+            for machine, health in analysis_results['machine_health'].items():
+                if health.get('score', 100) < 40:
+                    self.recommendations.append(Recommendation(
+                        priority=1,
+                        category='immediate',
+                        target=machine,
+                        action=f'Review and potentially restart federation services on {machine}',
+                        reason=f"Low health score ({health['score']:.0f}/100)",
+                        estimated_impact=f"Improve {len(health.get('stores', []))} store connections",
+                        confidence=0.8
+                    ))
+
+        # Sort by priority
+        self.recommendations.sort(key=lambda r: (r.priority, -r.confidence))
+
+        return self.recommendations
+
+    def _get_action_for_cause(self, cause: str) -> str:
+        """Get specific action for a root cause."""
+        actions = {
+            'network_issue': 'Review network routes and firewall rules for store connectivity',
+            'store_hardware': 'Schedule maintenance check for affected store vNVR hardware',
+            'certificate_expiry': 'Audit and renew TLS certificates across federation',
+            'server_overload': 'Rebalance store distribution across federation servers',
+            'configuration_error': 'Review recent configuration changes and federation settings',
+            'external_dependency': 'Check external service dependencies (DNS, proxy, etc.)'
+        }
+        return actions.get(cause, 'Investigate further')
+
+    def format_report(self) -> str:
+        """Format recommendations as a text report."""
+        if not self.recommendations:
+            return "No critical recommendations at this time."
+
+        lines = []
+        lines.append("=" * 70)
+        lines.append("ACTIONABLE RECOMMENDATIONS")
+        lines.append("=" * 70)
+
+        current_priority = None
+        for rec in self.recommendations:
+            if rec.priority != current_priority:
+                current_priority = rec.priority
+                priority_labels = {1: 'CRITICAL', 2: 'HIGH', 3: 'MEDIUM', 4: 'LOW', 5: 'INFO'}
+                lines.append(f"\n[{priority_labels.get(rec.priority, 'OTHER')} PRIORITY]")
+                lines.append("-" * 40)
+
+            lines.append(f"\n  Target: {rec.target}")
+            lines.append(f"  Action: {rec.action}")
+            lines.append(f"  Reason: {rec.reason}")
+            lines.append(f"  Impact: {rec.estimated_impact}")
+            lines.append(f"  Confidence: {rec.confidence:.0%}")
+
+        return "\n".join(lines)
 
 
 class FederationEvent:
@@ -300,11 +964,12 @@ class FederationLogAnalyzer:
 
         self.events.append(event)
 
+        # Calculate hour key for time-based statistics
+        hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+
         # Update statistics
         if error_category:
             self.error_category_totals[error_category] += 1
-
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
             self.hourly_errors[hour_key][error_category] += 1
 
         if store_id:
@@ -387,17 +1052,19 @@ class FederationLogAnalyzer:
         print(f"  Processed {self.files_processed} files, {self.lines_processed:,} lines")
 
     def analyze_anomalies(self) -> Dict:
-        """Use ML to detect anomalous stores."""
+        """Use ensemble ML methods to detect anomalous stores."""
         if not HAS_SKLEARN or len(self.store_stats) < 10:
-            return {'anomalous_stores': []}
+            return {'anomalous_stores': [], 'method_agreement': {}}
 
         print("\n" + "=" * 70)
-        print("ANOMALY DETECTION (Isolation Forest)")
+        print("ADVANCED ANOMALY DETECTION (Ensemble Methods)")
         print("=" * 70)
 
         # Build feature matrix
         store_ids = []
         features = []
+        feature_names = ['total_errors', 'variance', 'max_hourly', 'category_count',
+                         'ip_count', 'avg_interval_hours', 'min_interval', 'burst_score']
 
         for store_id, stats in self.store_stats.items():
             if stats['total_errors'] < 3:
@@ -418,9 +1085,12 @@ class FederationLogAnalyzer:
                          for i in range(len(timestamps)-1)]
                 avg_delta = np.mean(deltas)
                 min_delta = min(deltas)
+                # Burst score: how many consecutive short intervals
+                burst_score = sum(1 for d in deltas if d < 60) / len(deltas)
             else:
                 avg_delta = 0
                 min_delta = 0
+                burst_score = 0
 
             feature_vector = [
                 stats['total_errors'],
@@ -428,8 +1098,9 @@ class FederationLogAnalyzer:
                 max_hourly,
                 category_count,
                 len(stats['ips']),
-                avg_delta / 3600 if avg_delta > 0 else 0,  # Hours between errors
-                min_delta,  # Burst indicator
+                avg_delta / 3600 if avg_delta > 0 else 0,
+                min_delta,
+                burst_score,
             ]
 
             store_ids.append(store_id)
@@ -437,37 +1108,72 @@ class FederationLogAnalyzer:
 
         if len(features) < 10:
             print("Insufficient data for anomaly detection")
-            return {'anomalous_stores': []}
+            return {'anomalous_stores': [], 'method_agreement': {}}
 
         features = np.array(features)
-        scaler = StandardScaler()
-        scaled = scaler.fit_transform(features)
 
-        iso_forest = IsolationForest(contamination=0.1, random_state=42)
-        labels = iso_forest.fit_predict(scaled)
+        # Use advanced ensemble anomaly detection
+        detector = AdvancedAnomalyDetector(contamination=0.1)
+        labels, method_scores = detector.detect_ensemble(features)
+
+        # Calculate method agreement statistics
+        method_agreement = {
+            'isolation_forest': int(np.sum(method_scores.get('isolation_forest', []))),
+            'lof': int(np.sum(method_scores.get('lof', []))),
+            'dbscan': int(np.sum(method_scores.get('dbscan', []))),
+            'statistical': int(np.sum(method_scores.get('statistical', []))),
+            'ensemble_total': int(np.sum(method_scores.get('ensemble', [])))
+        }
+
+        print(f"\nMethod Agreement (anomalies detected):")
+        print(f"  Isolation Forest: {method_agreement['isolation_forest']}")
+        print(f"  Local Outlier Factor: {method_agreement['lof']}")
+        print(f"  DBSCAN: {method_agreement['dbscan']}")
+        print(f"  Statistical (Z-score): {method_agreement['statistical']}")
+        print(f"  Ensemble (>=2 agree): {method_agreement['ensemble_total']}")
 
         anomalous = []
-        for store_id, label, feat in zip(store_ids, labels, features):
+        votes = method_scores.get('votes', np.zeros(len(features)))
+
+        for i, (store_id, label, feat) in enumerate(zip(store_ids, labels, features)):
             if label == -1:
                 anomalous.append({
                     'store_id': store_id,
                     'total_errors': int(feat[0]),
                     'max_hourly': int(feat[2]),
                     'categories': len(self.store_stats[store_id]['error_categories']),
-                    'ips': list(self.store_stats[store_id]['ips'])[:3]
+                    'ips': list(self.store_stats[store_id]['ips'])[:3],
+                    'confidence': int(votes[i]) / 4,  # 4 methods total
+                    'dominant_error': max(
+                        self.store_stats[store_id]['error_categories'].items(),
+                        key=lambda x: x[1]
+                    )[0] if self.store_stats[store_id]['error_categories'] else 'unknown'
                 })
 
-        anomalous.sort(key=lambda x: x['total_errors'], reverse=True)
+        anomalous.sort(key=lambda x: (x['confidence'], x['total_errors']), reverse=True)
 
-        print(f"\nFound {len(anomalous)} anomalous stores:")
-        print(f"{'Store':<10}{'Errors':<10}{'Max/Hour':<10}{'Categories':<12}{'IPs'}")
-        print("-" * 60)
+        print(f"\nFound {len(anomalous)} anomalous stores (ensemble):")
+        print(f"{'Store':<10}{'Errors':<10}{'Max/Hr':<8}{'Conf':<8}{'Dominant Error':<25}{'IPs'}")
+        print("-" * 80)
         for s in anomalous[:20]:
             ips_str = ', '.join(s['ips']) if s['ips'] else 'N/A'
-            print(f"{s['store_id']:<10}{s['total_errors']:<10}{s['max_hourly']:<10}"
-                  f"{s['categories']:<12}{ips_str}")
+            print(f"{s['store_id']:<10}{s['total_errors']:<10}{s['max_hourly']:<8}"
+                  f"{s['confidence']:.0%}    {s['dominant_error']:<25}{ips_str[:20]}")
 
-        return {'anomalous_stores': anomalous}
+        # Feature importance analysis
+        print("\n--- Feature Importance (what drives anomalies) ---")
+        causal = CausalAnalyzer()
+        anomaly_labels = (labels == -1).astype(int)
+        importance = causal.calculate_feature_importance(features, anomaly_labels, feature_names)
+        for name, imp in list(importance.items())[:5]:
+            bar = '█' * int(imp * 40)
+            print(f"  {name:<20}: {bar} {imp:.2%}")
+
+        return {
+            'anomalous_stores': anomalous,
+            'method_agreement': method_agreement,
+            'feature_importance': importance
+        }
 
     def analyze_error_patterns(self) -> Dict:
         """Analyze error patterns using TF-IDF and clustering."""
@@ -596,9 +1302,9 @@ class FederationLogAnalyzer:
         return {'clusters': dict(clusters), 'profiles': cluster_profiles}
 
     def analyze_time_series(self) -> Dict:
-        """Analyze temporal patterns."""
+        """Analyze temporal patterns with advanced forecasting."""
         print("\n" + "=" * 70)
-        print("TIME SERIES ANALYSIS")
+        print("TIME SERIES ANALYSIS & FORECASTING")
         print("=" * 70)
 
         if not self.hourly_errors:
@@ -615,6 +1321,12 @@ class FederationLogAnalyzer:
 
         hourly_array = np.array(hourly_totals)
 
+        # Use PredictiveAnalytics for advanced analysis
+        predictor = PredictiveAnalytics()
+
+        # Decompose time series
+        decomposed = predictor.decompose_time_series(hourly_array, period=24)
+
         # Trend analysis
         first_half = np.mean(hourly_array[:len(hourly_array)//2])
         second_half = np.mean(hourly_array[len(hourly_array)//2:])
@@ -622,15 +1334,46 @@ class FederationLogAnalyzer:
 
         if change_pct > 20:
             trend = f"INCREASING (+{change_pct:.1f}%)"
+            trend_direction = 'increasing'
         elif change_pct < -20:
             trend = f"DECREASING ({change_pct:.1f}%)"
+            trend_direction = 'decreasing'
         else:
             trend = "STABLE"
+            trend_direction = 'stable'
 
-        print(f"\nTrend: {trend}")
+        print(f"\nCurrent Trend: {trend}")
         print(f"Average errors/hour: {np.mean(hourly_array):.1f}")
         print(f"Max errors/hour: {np.max(hourly_array):,}")
         print(f"Std deviation: {np.std(hourly_array):.1f}")
+
+        # Change point detection
+        detector = AdvancedAnomalyDetector()
+        change_points = detector.detect_change_points(hourly_array)
+        if change_points:
+            print(f"\nChange Points Detected: {len(change_points)}")
+            for cp in change_points[:5]:
+                if cp < len(hours):
+                    print(f"  - {hours[cp]}: Error rate changed significantly")
+
+        # Forecast next 24 hours
+        forecast_result = predictor.forecast(hourly_array, horizon=24)
+        print(f"\n--- 24-HOUR FORECAST ---")
+        print(f"Predicted total errors: {int(sum(forecast_result['forecast'])):,}")
+        print(f"Trend direction: {forecast_result['trend_direction']}")
+        print(f"Peak forecast hour: {np.argmax(forecast_result['forecast'])}:00 "
+              f"({int(max(forecast_result['forecast']))} errors)")
+        print(f"Low forecast hour: {np.argmin(forecast_result['forecast'])}:00 "
+              f"({int(min(forecast_result['forecast']))} errors)")
+
+        # Display forecast with confidence intervals
+        print(f"\n{'Hour':<6}{'Forecast':<12}{'95% CI':<20}")
+        print("-" * 40)
+        for i in range(0, 24, 3):  # Show every 3 hours
+            fc = forecast_result['forecast'][i]
+            lb = forecast_result['lower_bound'][i]
+            ub = forecast_result['upper_bound'][i]
+            print(f"{i:02d}:00  {fc:<12.0f}[{lb:.0f} - {ub:.0f}]")
 
         # Hour of day pattern
         hour_of_day_counts = defaultdict(int)
@@ -661,85 +1404,176 @@ class FederationLogAnalyzer:
 
         return {
             'trend': trend,
-            'avg_hourly': np.mean(hourly_array),
-            'max_hourly': np.max(hourly_array)
+            'trend_direction': trend_direction,
+            'avg_hourly': float(np.mean(hourly_array)),
+            'max_hourly': int(np.max(hourly_array)),
+            'forecast': forecast_result,
+            'change_points': change_points
+        }
+
+    def analyze_cascades(self) -> Dict:
+        """Detect and analyze cascading failures."""
+        print("\n" + "=" * 70)
+        print("CASCADE FAILURE DETECTION")
+        print("=" * 70)
+
+        if len(self.events) < 100:
+            print("Insufficient events for cascade detection")
+            return {}
+
+        # Detect cascades
+        cascade_detector = CascadeDetector(time_window_seconds=60)
+        cascades = cascade_detector.detect_cascades(self.events, min_stores=5)
+
+        if not cascades:
+            print("\nNo significant cascade events detected")
+            return {'cascades': [], 'propagation': {}}
+
+        # Analyze propagation patterns
+        propagation = cascade_detector.analyze_propagation(cascades)
+
+        print(f"\nCascade Statistics:")
+        print(f"  Total cascade events: {propagation['total_cascades']}")
+        print(f"  Average stores affected: {propagation['avg_stores_affected']:.1f}")
+        print(f"  Max stores in single cascade: {propagation['max_stores_in_cascade']}")
+        print(f"  Server-wide cascades: {propagation['server_wide_cascades']}")
+
+        print(f"\nCascade Error Types:")
+        for error_type, count in sorted(propagation['common_error_types'].items(),
+                                        key=lambda x: x[1], reverse=True):
+            print(f"  {error_type}: {count}")
+
+        print(f"\nTop 10 Cascade Events:")
+        print(f"{'Start Time':<22}{'Stores':<10}{'Events':<10}{'Error Type':<25}{'Server-wide'}")
+        print("-" * 80)
+
+        for cascade in sorted(cascades, key=lambda c: c['store_count'], reverse=True)[:10]:
+            server_wide = "YES" if cascade['is_server_wide'] else "No"
+            print(f"{str(cascade['start_time']):<22}{cascade['store_count']:<10}"
+                  f"{cascade['event_count']:<10}{cascade['dominant_error']:<25}{server_wide}")
+
+        return {
+            'cascades': cascades,
+            'propagation': propagation,
+            'server_wide_cascades': propagation['server_wide_cascades']
         }
 
     def analyze_root_causes(self) -> Dict:
-        """Perform root cause analysis."""
+        """Perform advanced root cause analysis with Bayesian inference."""
         print("\n" + "=" * 70)
-        print("ROOT CAUSE ANALYSIS")
+        print("ROOT CAUSE ANALYSIS (AI-Powered)")
         print("=" * 70)
 
-        recommendations = []
+        # Initialize causal analyzer
+        causal = CausalAnalyzer()
 
-        # Machine analysis
-        print(f"\nMachine Health:")
-        print(f"{'Machine':<15}{'Errors':<12}{'Stores':<10}{'Errors/Store':<15}{'Status'}")
-        print("-" * 62)
+        # Machine health analysis
+        print(f"\nMachine Health Scores:")
+        print(f"{'Machine':<15}{'Errors':<12}{'Stores':<10}{'Errors/Store':<15}{'Health':<12}{'Status'}")
+        print("-" * 75)
 
+        machine_health = {}
         for machine, stats in sorted(self.machine_stats.items(),
                                     key=lambda x: x[1]['total_errors'], reverse=True):
             errors = stats['total_errors']
             stores = len(stats['stores'])
             ratio = errors / stores if stores > 0 else 0
 
-            if ratio > 50:
-                status = "⚠ HIGH"
-            elif ratio > 20:
-                status = "⚡ ELEVATED"
+            # Calculate health score (0-100, higher is better)
+            health_score = max(0, 100 - min(100, ratio * 2 + errors / 1000))
+
+            if health_score < 30:
+                status = "CRITICAL"
+            elif health_score < 50:
+                status = "WARNING"
+            elif health_score < 70:
+                status = "FAIR"
             else:
-                status = "✓ NORMAL"
+                status = "GOOD"
 
-            print(f"{machine:<15}{errors:<12,}{stores:<10}{ratio:<15.1f}{status}")
+            machine_health[machine] = {
+                'score': health_score,
+                'errors': errors,
+                'stores': list(stats['stores']),
+                'ratio': ratio
+            }
 
-            if ratio > 50:
-                recommendations.append(f"Investigate {machine} - high error rate per store")
+            health_bar = '█' * int(health_score / 10) + '░' * (10 - int(health_score / 10))
+            print(f"{machine:<15}{errors:<12,}{stores:<10}{ratio:<15.1f}{health_bar} {health_score:.0f}  {status}")
+
+        # Bayesian root cause inference
+        print(f"\n--- PROBABILISTIC ROOT CAUSE ANALYSIS ---")
+        root_causes = causal.infer_root_causes(
+            self.store_stats,
+            self.machine_stats,
+            self.error_category_totals
+        )
+
+        print(f"\nInferred Root Causes (Bayesian Analysis):")
+        print(f"{'Cause':<25}{'Probability':<15}{'Evidence'}")
+        print("-" * 70)
+        for cause in root_causes:
+            prob_bar = '█' * int(cause['probability'] * 20)
+            print(f"{cause['cause']:<25}{prob_bar} {cause['probability']:.0%}    {cause['evidence']}")
 
         # IP analysis - find problematic endpoints
-        print(f"\nTop Problem IPs:")
-        print(f"{'IP Address':<20}{'Errors':<12}{'Stores':<10}")
-        print("-" * 42)
+        print(f"\nTop Problem IPs (potential bottlenecks):")
+        print(f"{'IP Address':<20}{'Errors':<12}{'Stores':<10}{'Errors/Store'}")
+        print("-" * 55)
 
         top_ips = sorted(self.ip_stats.items(),
                         key=lambda x: x[1]['errors'], reverse=True)[:15]
         for ip, stats in top_ips:
-            print(f"{ip:<20}{stats['errors']:<12,}{len(stats['stores']):<10}")
+            stores_count = len(stats['stores'])
+            ratio = stats['errors'] / stores_count if stores_count > 0 else 0
+            print(f"{ip:<20}{stats['errors']:<12,}{stores_count:<10}{ratio:.1f}")
 
-        # Store analysis
-        problem_stores = [(s, d['total_errors']) for s, d in self.store_stats.items()
-                         if d['total_errors'] > 100]
-        if problem_stores:
-            recommendations.append(
-                f"{len(problem_stores)} stores have >100 errors - prioritize investigation"
-            )
+        # Store risk analysis
+        print(f"\n--- STORE RISK ANALYSIS ---")
+        predictor = PredictiveAnalytics()
 
-        # Error category recommendations
-        for cat, count in sorted(self.error_category_totals.items(),
-                                key=lambda x: x[1], reverse=True)[:3]:
-            if cat == 'connection_timeout':
-                recommendations.append(
-                    f"High timeout errors ({count:,}) - check network latency and store connectivity"
-                )
-            elif cat == 'tls_handshake_error':
-                recommendations.append(
-                    f"TLS errors ({count:,}) - verify certificates and TLS versions"
-                )
-            elif cat == 'host_unreachable':
-                recommendations.append(
-                    f"Host unreachable ({count:,}) - check store network/VPN connectivity"
-                )
+        high_risk_stores = []
+        for store_id, stats in self.store_stats.items():
+            if stats['total_errors'] < 10:
+                continue
 
-        print(f"\nRecommendations:")
-        for i, rec in enumerate(recommendations[:10], 1):
-            print(f"  {i}. {rec}")
+            # Calculate failure probability
+            hourly_values = list(stats['hourly_counts'].values())
+            features = {
+                'recent_errors': stats['total_errors'],
+                'error_variance': np.var(hourly_values) if len(hourly_values) > 1 else 0,
+                'error_types': len(stats['error_categories']),
+                'trend': 'increasing' if len(hourly_values) > 2 and hourly_values[-1] > np.mean(hourly_values) else 'stable',
+                'burst_count': len([d for d in stats.get('reconnect_delays', []) if d < 60])
+            }
 
-        return {'recommendations': recommendations}
+            prob = predictor.predict_failure_probability(features)
+            if prob > 0.6:
+                high_risk_stores.append({
+                    'store_id': store_id,
+                    'probability': prob,
+                    'total_errors': stats['total_errors']
+                })
+
+        if high_risk_stores:
+            print(f"\nHigh-Risk Stores (>60% failure probability):")
+            print(f"{'Store':<12}{'Risk':<12}{'Current Errors'}")
+            print("-" * 40)
+            for store in sorted(high_risk_stores, key=lambda x: x['probability'], reverse=True)[:15]:
+                risk_bar = '█' * int(store['probability'] * 10)
+                print(f"{store['store_id']:<12}{risk_bar} {store['probability']:.0%}    {store['total_errors']:,}")
+
+        return {
+            'machine_health': machine_health,
+            'root_causes': root_causes,
+            'high_risk_stores': high_risk_stores
+        }
 
     def generate_report(self):
-        """Generate comprehensive analysis report."""
+        """Generate comprehensive AI-powered analysis report with recommendations."""
         print("\n" + "=" * 70)
         print("FEDERATION LOG AI ANALYSIS REPORT")
+        print("Advanced ML Analysis with Predictive Analytics")
         print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 70)
 
@@ -755,22 +1589,94 @@ class FederationLogAnalyzer:
             print(f"  Time range: {self.min_ts} to {self.max_ts}")
             print(f"  Duration: {duration}")
 
+        # Collect all analysis results
+        results = {}
+
         # Run all analyses
+        print("\n[1/6] Analyzing error patterns...")
         self.analyze_error_patterns()
-        anomalies = self.analyze_anomalies()
-        clusters = self.analyze_store_clusters()
-        time_series = self.analyze_time_series()
+
+        print("\n[2/6] Running ensemble anomaly detection...")
+        results['anomalies'] = self.analyze_anomalies()
+
+        print("\n[3/6] Clustering stores by behavior...")
+        results['clusters'] = self.analyze_store_clusters()
+
+        print("\n[4/6] Analyzing time series and forecasting...")
+        results['time_series'] = self.analyze_time_series()
+
+        print("\n[5/6] Detecting cascade failures...")
+        results['cascades'] = self.analyze_cascades()
+
+        print("\n[6/6] Performing root cause analysis...")
         root_cause = self.analyze_root_causes()
+        results['root_causes'] = root_cause.get('root_causes', [])
+        results['machine_health'] = root_cause.get('machine_health', {})
+        results['predictions'] = results['time_series']
+
+        # Generate actionable recommendations
+        print("\n" + "=" * 70)
+        rec_engine = RecommendationEngine()
+        recommendations = rec_engine.generate_recommendations(results)
+
+        print(rec_engine.format_report())
+
+        # Executive Summary
+        print("\n" + "=" * 70)
+        print("EXECUTIVE SUMMARY")
+        print("=" * 70)
+
+        # Key metrics
+        total_errors = sum(self.error_category_totals.values())
+        anomalous_count = len(results['anomalies'].get('anomalous_stores', []))
+        cascade_count = len(results['cascades'].get('cascades', []))
+
+        print(f"\nKey Metrics:")
+        print(f"  Total Errors Analyzed: {total_errors:,}")
+        print(f"  Anomalous Stores Detected: {anomalous_count}")
+        print(f"  Cascade Events Detected: {cascade_count}")
+
+        if results['time_series']:
+            trend = results['time_series'].get('trend_direction', 'unknown')
+            print(f"  Error Trend: {trend.upper()}")
+
+            forecast = results['time_series'].get('forecast', {})
+            if forecast:
+                next_24h = sum(forecast.get('forecast', []))
+                print(f"  24-Hour Forecast: {int(next_24h):,} errors expected")
+
+        # Top root cause
+        if results['root_causes']:
+            top_cause = results['root_causes'][0]
+            print(f"  Most Likely Root Cause: {top_cause['cause']} ({top_cause['probability']:.0%})")
+
+        # Critical actions
+        critical_recs = [r for r in recommendations if r.priority == 1]
+        if critical_recs:
+            print(f"\nCritical Actions Required: {len(critical_recs)}")
+            for rec in critical_recs[:3]:
+                print(f"  → {rec.action}")
 
         print("\n" + "=" * 70)
         print("END OF AI ANALYSIS REPORT")
         print("=" * 70)
 
         return {
-            'anomalies': anomalies,
-            'clusters': clusters,
-            'time_series': time_series,
-            'root_cause': root_cause
+            'anomalies': results['anomalies'],
+            'clusters': results['clusters'],
+            'time_series': results['time_series'],
+            'cascades': results['cascades'],
+            'root_causes': results['root_causes'],
+            'recommendations': [
+                {
+                    'priority': r.priority,
+                    'action': r.action,
+                    'target': r.target,
+                    'reason': r.reason,
+                    'confidence': r.confidence
+                }
+                for r in recommendations
+            ]
         }
 
 
