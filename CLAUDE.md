@@ -33,6 +33,13 @@ The tools analyze logs from federated Security Center deployments (specifically 
 
 ## Running the Analyzers
 
+**File Management Workflow:**
+- When working with ZIP files, always unzip them to `/Volumes/MacMini/temps/claude/templogs` before analysis
+- Keep unzipped files in `/Volumes/MacMini/temps/claude/templogs` until a new session with new zip files is started
+- Before removing existing log files from `/Volumes/MacMini/temps/claude/templogs`, ask whether the new zip files should:
+  - **Add to** existing files (keep old files and add new ones)
+  - **Replace** existing files (remove old files before unzipping new ones)
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt

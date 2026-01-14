@@ -8,6 +8,7 @@ import re
 import warnings
 import zipfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
@@ -760,7 +761,7 @@ class FederationLogAnalyzer:
         n_clusters = min(5, len(features) // 50)
         n_clusters = max(2, n_clusters)
 
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=3, n_jobs=-1)
         labels = kmeans.fit_predict(scaled)
 
         # Analyze clusters
@@ -1146,30 +1147,41 @@ class FederationLogAnalyzer:
         # Collect all analysis results
         results = {}
 
-        # Run all analyses
-        logger.info("\n[1/8] Analyzing error patterns...")
-        self.analyze_error_patterns()
+        # Run independent analyses in parallel for better performance
+        logger.info("\n[1-6/8] Running parallel analyses...")
 
-        logger.info("\n[2/8] Analyzing Internal Errors...")
-        results["internal_errors"] = self.analyze_internal_errors()
+        # Define analysis tasks (independent of each other)
+        analysis_tasks = {
+            "error_patterns": ("Analyzing error patterns", self.analyze_error_patterns),
+            "internal_errors": ("Analyzing Internal Errors", self.analyze_internal_errors),
+            "anomalies": ("Running ensemble anomaly detection", self.analyze_anomalies),
+            "clusters": ("Clustering stores by behavior", self.analyze_store_clusters),
+            "time_series": ("Analyzing time series and forecasting", self.analyze_time_series),
+            "cascades": ("Detecting cascade failures", self.analyze_cascades),
+        }
 
-        logger.info("\n[3/8] Running ensemble anomaly detection...")
-        results["anomalies"] = self.analyze_anomalies()
+        # Run analyses in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            future_to_name = {
+                executor.submit(func): (name, desc) for name, (desc, func) in analysis_tasks.items()
+            }
 
-        logger.info("\n[4/8] Clustering stores by behavior...")
-        results["clusters"] = self.analyze_store_clusters()
-
-        logger.info("\n[5/8] Analyzing time series and forecasting...")
-        results["time_series"] = self.analyze_time_series()
-
-        logger.info("\n[6/8] Detecting cascade failures...")
-        results["cascades"] = self.analyze_cascades()
+            for future in as_completed(future_to_name):
+                name, desc = future_to_name[future]
+                try:
+                    result = future.result()
+                    if name != "error_patterns":  # error_patterns doesn't return a value
+                        results[name] = result if result else {}
+                    logger.info("  Completed: %s", desc)
+                except Exception as e:
+                    logger.error("  Failed: %s - %s", desc, str(e))
+                    results[name] = {}
 
         logger.info("\n[7/8] Performing root cause analysis...")
         root_cause = self.analyze_root_causes()
         results["root_causes"] = root_cause.get("root_causes", [])
         results["machine_health"] = root_cause.get("machine_health", {})
-        results["predictions"] = results["time_series"]
+        results["predictions"] = results.get("time_series", {})
 
         # Run AI Optimization if available
         if HAS_AI_OPTIMIZER:

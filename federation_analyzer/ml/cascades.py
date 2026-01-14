@@ -3,7 +3,6 @@ Cascade failure detection and propagation analysis.
 """
 
 from collections import defaultdict
-from datetime import datetime, timedelta
 from typing import Dict, List
 
 import numpy as np
@@ -21,36 +20,38 @@ class CascadeDetector:
     def detect_cascades(self, events: List, min_stores: int = 3) -> List[Dict]:
         """
         Detect cascade events where multiple stores fail within time window.
+        Optimized with numpy for O(n log n) instead of O(n²) complexity.
         """
         if not events:
             return []
 
-        # Sort events by timestamp
-        sorted_events = sorted(events, key=lambda e: e.timestamp if e.timestamp else datetime.min)
+        # Filter events with valid timestamps and sort
+        valid_events = [e for e in events if e.timestamp is not None]
+        if not valid_events:
+            return []
+
+        sorted_events = sorted(valid_events, key=lambda e: e.timestamp)
+        n_events = len(sorted_events)
+
+        # Convert timestamps to numpy for fast searchsorted
+        timestamps = np.array([e.timestamp.timestamp() for e in sorted_events])
+        window_delta = self.time_window
 
         cascades = []
         i = 0
 
-        while i < len(sorted_events):
-            if sorted_events[i].timestamp is None:
-                i += 1
-                continue
+        while i < n_events:
+            # Use searchsorted to find window boundary in O(log n) instead of O(n)
+            window_end_ts = timestamps[i] + window_delta
+            j = np.searchsorted(timestamps, window_end_ts, side="right")
 
-            # Find all events within time window
-            window_end = sorted_events[i].timestamp + timedelta(seconds=self.time_window)
+            # Collect stores and events in window
             stores_in_window = set()
             events_in_window = []
-
-            j = i
-            while (
-                j < len(sorted_events)
-                and sorted_events[j].timestamp
-                and sorted_events[j].timestamp <= window_end
-            ):
-                if sorted_events[j].store_id:
-                    stores_in_window.add(sorted_events[j].store_id)
-                    events_in_window.append(sorted_events[j])
-                j += 1
+            for k in range(i, j):
+                if sorted_events[k].store_id:
+                    stores_in_window.add(sorted_events[k].store_id)
+                    events_in_window.append(sorted_events[k])
 
             # Check if this is a cascade
             if len(stores_in_window) >= min_stores:

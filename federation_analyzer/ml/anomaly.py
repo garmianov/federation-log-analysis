@@ -52,7 +52,7 @@ class AdvancedAnomalyDetector:
 
         # 1. Isolation Forest
         self.isolation_forest = IsolationForest(
-            contamination=self.contamination, random_state=42, n_estimators=100
+            contamination=self.contamination, random_state=42, n_estimators=100, n_jobs=-1
         )
         if_labels = self.isolation_forest.fit_predict(scaled)
         if_anomalies = (if_labels == -1).astype(int)
@@ -61,7 +61,7 @@ class AdvancedAnomalyDetector:
 
         # 2. Local Outlier Factor
         self.lof = LocalOutlierFactor(
-            n_neighbors=min(20, n_samples - 1), contamination=self.contamination
+            n_neighbors=min(20, n_samples - 1), contamination=self.contamination, n_jobs=-1
         )
         lof_labels = self.lof.fit_predict(scaled)
         lof_anomalies = (lof_labels == -1).astype(int)

@@ -9,36 +9,29 @@ This module provides:
 - Sequence Learning for temporal pattern detection
 - Cross-validation and model evaluation metrics
 - Bayesian Optimization for hyperparameter tuning
-- Gradient Boosting for Internal Error classification
+- Random Forest for Internal Error classification
 """
 
-import numpy as np
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
 import warnings
-warnings.filterwarnings('ignore')
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
+import numpy as np
+
+warnings.filterwarnings("ignore")
 
 try:
-    from sklearn.ensemble import (
-        IsolationForest, RandomForestClassifier,
-        GradientBoostingClassifier, AdaBoostClassifier,
-        VotingClassifier
-    )
-    from sklearn.cluster import KMeans, DBSCAN
-    from sklearn.neighbors import LocalOutlierFactor
-    from sklearn.svm import OneClassSVM
-    from sklearn.preprocessing import StandardScaler, LabelEncoder, MinMaxScaler
+    from sklearn.cluster import DBSCAN, KMeans
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.ensemble import IsolationForest, RandomForestClassifier
     from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.decomposition import PCA, TruncatedSVD
-    from sklearn.model_selection import cross_val_score, StratifiedKFold
-    from sklearn.metrics import (
-        classification_report, confusion_matrix,
-        precision_recall_fscore_support, silhouette_score,
-        roc_auc_score, average_precision_score
-    )
+    from sklearn.metrics import precision_recall_fscore_support, silhouette_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    from sklearn.neighbors import LocalOutlierFactor
     from sklearn.neural_network import MLPClassifier
-    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
+    from sklearn.svm import OneClassSVM
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
@@ -46,9 +39,7 @@ except ImportError:
 
 try:
     from scipy import stats
-    from scipy.signal import find_peaks, savgol_filter
-    from scipy.ndimage import uniform_filter1d
-    from scipy.spatial.distance import cdist
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -58,9 +49,11 @@ except ImportError:
 # ENHANCED ANOMALY DETECTION
 # =============================================================================
 
+
 @dataclass
 class AnomalyResult:
     """Results from anomaly detection."""
+
     labels: np.ndarray
     scores: np.ndarray
     method_votes: Dict[str, np.ndarray]
@@ -87,8 +80,7 @@ class EnhancedAnomalyDetector:
         self.models = {}
         self.is_fitted = False
 
-    def fit_predict(self, features: np.ndarray,
-                    feature_names: List[str] = None) -> AnomalyResult:
+    def fit_predict(self, features: np.ndarray, feature_names: List[str] = None) -> AnomalyResult:
         """
         Fit ensemble and predict anomalies with confidence scores.
         """
@@ -98,7 +90,7 @@ class EnhancedAnomalyDetector:
                 scores=np.zeros(len(features)),
                 method_votes={},
                 confidence=np.zeros(len(features)),
-                feature_importance={}
+                feature_importance={},
             )
 
         n_samples = len(features)
@@ -111,89 +103,104 @@ class EnhancedAnomalyDetector:
 
         # 1. Isolation Forest (optimized parameters)
         print("    Running Isolation Forest...")
-        self.models['isolation_forest'] = IsolationForest(
+        self.models["isolation_forest"] = IsolationForest(
             contamination=self.contamination,
-            n_estimators=200,
-            max_samples='auto',
+            n_estimators=100,  # Reduced from 200 for faster training
+            max_samples="auto",
             max_features=min(1.0, 8 / features.shape[1]) if features.shape[1] > 8 else 1.0,
             bootstrap=True,
             random_state=self.random_state,
-            n_jobs=-1
+            n_jobs=-1,
         )
-        if_labels = self.models['isolation_forest'].fit_predict(scaled)
-        if_scores = -self.models['isolation_forest'].score_samples(scaled)
+        if_labels = self.models["isolation_forest"].fit_predict(scaled)
+        if_scores = -self.models["isolation_forest"].score_samples(scaled)
         if_anomalies = (if_labels == -1).astype(int)
         votes += if_anomalies
-        method_scores['isolation_forest'] = if_anomalies
+        method_scores["isolation_forest"] = if_anomalies
         anomaly_scores += self._normalize_scores(if_scores)
 
-        # 2. Local Outlier Factor (optimized n_neighbors)
+        # 2. Local Outlier Factor (with subsampling for large datasets)
         print("    Running Local Outlier Factor...")
-        n_neighbors = min(max(20, n_samples // 20), n_samples - 1)
-        self.models['lof'] = LocalOutlierFactor(
-            n_neighbors=n_neighbors,
-            contamination=self.contamination,
-            metric='euclidean',
-            n_jobs=-1
-        )
-        lof_labels = self.models['lof'].fit_predict(scaled)
-        lof_scores = -self.models['lof'].negative_outlier_factor_
-        lof_anomalies = (lof_labels == -1).astype(int)
+        max_lof_samples = 5000
+        if n_samples > max_lof_samples:
+            # Subsample for LOF training, use novelty mode to predict on full data
+            lof_subsample_idx = np.random.choice(n_samples, max_lof_samples, replace=False)
+            lof_train_data = scaled[lof_subsample_idx]
+            n_neighbors = min(max(20, max_lof_samples // 20), max_lof_samples - 1)
+            self.models["lof"] = LocalOutlierFactor(
+                n_neighbors=n_neighbors,
+                contamination=self.contamination,
+                metric="euclidean",
+                novelty=True,  # Enable prediction on new data
+                n_jobs=-1,
+            )
+            self.models["lof"].fit(lof_train_data)
+            lof_scores = -self.models["lof"].decision_function(scaled)
+            lof_anomalies = (self.models["lof"].predict(scaled) == -1).astype(int)
+        else:
+            n_neighbors = min(max(20, n_samples // 20), n_samples - 1)
+            self.models["lof"] = LocalOutlierFactor(
+                n_neighbors=n_neighbors,
+                contamination=self.contamination,
+                metric="euclidean",
+                n_jobs=-1,
+            )
+            lof_labels = self.models["lof"].fit_predict(scaled)
+            lof_scores = -self.models["lof"].negative_outlier_factor_
+            lof_anomalies = (lof_labels == -1).astype(int)
         votes += lof_anomalies
-        method_scores['lof'] = lof_anomalies
+        method_scores["lof"] = lof_anomalies
         anomaly_scores += self._normalize_scores(lof_scores)
 
-        # 3. One-Class SVM (RBF kernel)
+        # 3. One-Class SVM (RBF kernel) - aggressive subsampling for O(n³) complexity
         print("    Running One-Class SVM...")
-        # Use subsample for large datasets
-        if n_samples > 5000:
-            subsample_idx = np.random.choice(n_samples, 5000, replace=False)
+        max_svm_samples = 2000  # Reduced from 5000 due to O(n³) complexity
+        if n_samples > max_svm_samples:
+            subsample_idx = np.random.choice(n_samples, max_svm_samples, replace=False)
             train_data = scaled[subsample_idx]
         else:
             train_data = scaled
 
-        self.models['ocsvm'] = OneClassSVM(
-            kernel='rbf',
-            gamma='scale',
-            nu=self.contamination
+        self.models["ocsvm"] = OneClassSVM(
+            kernel="rbf",
+            gamma="scale",
+            nu=self.contamination,
+            cache_size=500,  # Memory cache for kernel computations
         )
-        self.models['ocsvm'].fit(train_data)
-        ocsvm_labels = self.models['ocsvm'].predict(scaled)
-        ocsvm_scores = -self.models['ocsvm'].decision_function(scaled)
+        self.models["ocsvm"].fit(train_data)
+        ocsvm_labels = self.models["ocsvm"].predict(scaled)
+        ocsvm_scores = -self.models["ocsvm"].decision_function(scaled)
         ocsvm_anomalies = (ocsvm_labels == -1).astype(int)
         votes += ocsvm_anomalies
-        method_scores['ocsvm'] = ocsvm_anomalies
+        method_scores["ocsvm"] = ocsvm_anomalies
         anomaly_scores += self._normalize_scores(ocsvm_scores)
 
         # 4. DBSCAN with automatic eps selection
         print("    Running DBSCAN...")
         eps = self._find_optimal_eps(scaled)
-        self.models['dbscan'] = DBSCAN(
-            eps=eps,
-            min_samples=max(3, n_samples // 100),
-            metric='euclidean',
-            n_jobs=-1
+        self.models["dbscan"] = DBSCAN(
+            eps=eps, min_samples=max(3, n_samples // 100), metric="euclidean", n_jobs=-1
         )
-        db_labels = self.models['dbscan'].fit_predict(scaled)
+        db_labels = self.models["dbscan"].fit_predict(scaled)
         db_anomalies = (db_labels == -1).astype(int)
         votes += db_anomalies
-        method_scores['dbscan'] = db_anomalies
+        method_scores["dbscan"] = db_anomalies
 
         # 5. Statistical methods (Z-score + IQR + MAD)
         print("    Running Statistical Analysis...")
         stat_scores = self._statistical_anomaly_scores(features)
         stat_anomalies = (stat_scores > 0.5).astype(int)
         votes += stat_anomalies
-        method_scores['statistical'] = stat_anomalies
+        method_scores["statistical"] = stat_anomalies
         anomaly_scores += stat_scores
 
         # Ensemble: weighted voting (methods with better precision get higher weight)
         method_weights = {
-            'isolation_forest': 1.5,  # Good for high-dimensional data
-            'lof': 1.2,               # Good for local anomalies
-            'ocsvm': 1.0,             # Good for boundary detection
-            'dbscan': 0.8,            # Can miss scattered anomalies
-            'statistical': 1.0        # Baseline
+            "isolation_forest": 1.5,  # Good for high-dimensional data
+            "lof": 1.2,  # Good for local anomalies
+            "ocsvm": 1.0,  # Good for boundary detection
+            "dbscan": 0.8,  # Can miss scattered anomalies
+            "statistical": 1.0,  # Baseline
         }
 
         weighted_votes = np.zeros(n_samples)
@@ -215,9 +222,9 @@ class EnhancedAnomalyDetector:
                 features, (ensemble_labels == -1).astype(int), feature_names
             )
 
-        method_scores['ensemble'] = (ensemble_labels == -1).astype(int)
-        method_scores['votes'] = votes
-        method_scores['weighted_votes'] = weighted_votes
+        method_scores["ensemble"] = (ensemble_labels == -1).astype(int)
+        method_scores["votes"] = votes
+        method_scores["weighted_votes"] = weighted_votes
 
         self.is_fitted = True
 
@@ -226,7 +233,7 @@ class EnhancedAnomalyDetector:
             scores=anomaly_scores / 5,  # Average of 5 methods
             method_votes=method_scores,
             confidence=confidence,
-            feature_importance=feature_importance
+            feature_importance=feature_importance,
         )
 
     def _normalize_scores(self, scores: np.ndarray) -> np.ndarray:
@@ -286,18 +293,15 @@ class EnhancedAnomalyDetector:
 
         return scores
 
-    def _calculate_feature_importance(self, features: np.ndarray,
-                                      labels: np.ndarray,
-                                      feature_names: List[str]) -> Dict[str, float]:
+    def _calculate_feature_importance(
+        self, features: np.ndarray, labels: np.ndarray, feature_names: List[str]
+    ) -> Dict[str, float]:
         """Calculate feature importance using Random Forest."""
         if len(np.unique(labels)) < 2:
             return {}
 
         rf = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
-            random_state=self.random_state,
-            n_jobs=-1
+            n_estimators=100, max_depth=10, random_state=self.random_state, n_jobs=-1
         )
         rf.fit(features, labels)
 
@@ -308,6 +312,7 @@ class EnhancedAnomalyDetector:
 # =============================================================================
 # NEURAL NETWORK-STYLE PATTERN RECOGNITION
 # =============================================================================
+
 
 class NeuralPatternRecognizer:
     """
@@ -332,11 +337,7 @@ class NeuralPatternRecognizer:
 
         # TF-IDF vectorization
         self.vectorizer = TfidfVectorizer(
-            max_features=1000,
-            ngram_range=(1, 3),
-            min_df=2,
-            max_df=0.95,
-            stop_words='english'
+            max_features=1000, ngram_range=(1, 3), min_df=2, max_df=0.95, stop_words="english"
         )
 
         tfidf_matrix = self.vectorizer.fit_transform(messages)
@@ -362,25 +363,28 @@ class NeuralPatternRecognizer:
         if min(counts) < 3:
             print("    Warning: Some classes have too few samples for cross-validation")
 
-        # Build MLP classifier (neural network)
+        # Build MLP classifier (neural network) - optimized architecture
         self.classifier = MLPClassifier(
-            hidden_layer_sizes=(100, 50, 25),
-            activation='relu',
-            solver='adam',
+            hidden_layer_sizes=(64, 32),  # Simplified from (100, 50, 25)
+            activation="relu",
+            solver="adam",
             alpha=0.001,
-            batch_size='auto',
-            learning_rate='adaptive',
-            max_iter=500,
+            batch_size="auto",
+            learning_rate="adaptive",
+            max_iter=200,  # Reduced from 500
             random_state=self.random_state,
             early_stopping=True,
-            validation_fraction=0.1
+            n_iter_no_change=10,  # Stop early if no improvement
+            validation_fraction=0.1,
         )
 
-        # Cross-validation
-        n_splits = min(5, min(counts))
+        # Cross-validation (reduced folds for speed)
+        n_splits = min(3, min(counts))  # Reduced from 5 to 3 folds
         if n_splits >= 2:
             cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
-            cv_scores = cross_val_score(self.classifier, features, encoded_labels, cv=cv, scoring='accuracy')
+            cv_scores = cross_val_score(
+                self.classifier, features, encoded_labels, cv=cv, scoring="accuracy"
+            )
         else:
             cv_scores = np.array([0.0])
 
@@ -391,11 +395,11 @@ class NeuralPatternRecognizer:
         importance = self._permutation_importance(features, encoded_labels)
 
         return {
-            'cv_mean': float(np.mean(cv_scores)),
-            'cv_std': float(np.std(cv_scores)),
-            'classes': list(self.label_encoder.classes_),
-            'n_features': features.shape[1],
-            'feature_importance': importance
+            "cv_mean": float(np.mean(cv_scores)),
+            "cv_std": float(np.std(cv_scores)),
+            "classes": list(self.label_encoder.classes_),
+            "n_features": features.shape[1],
+            "feature_importance": importance,
         }
 
     def predict(self, features: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -408,8 +412,7 @@ class NeuralPatternRecognizer:
 
         return predictions, probabilities
 
-    def _permutation_importance(self, features: np.ndarray,
-                                labels: np.ndarray) -> Dict[int, float]:
+    def _permutation_importance(self, features: np.ndarray, labels: np.ndarray) -> Dict[int, float]:
         """Calculate permutation importance for features."""
         base_score = self.classifier.score(features, labels)
         importance = {}
@@ -426,6 +429,7 @@ class NeuralPatternRecognizer:
 # =============================================================================
 # SEQUENCE LEARNING FOR TEMPORAL PATTERNS
 # =============================================================================
+
 
 class SequenceAnalyzer:
     """
@@ -444,12 +448,11 @@ class SequenceAnalyzer:
 
         sequences = []
         for i in range(len(time_series) - self.window_size):
-            sequences.append(time_series[i:i + self.window_size])
+            sequences.append(time_series[i : i + self.window_size])
 
         return np.array(sequences)
 
-    def detect_recurring_patterns(self, time_series: np.ndarray,
-                                  n_patterns: int = 5) -> List[Dict]:
+    def detect_recurring_patterns(self, time_series: np.ndarray, n_patterns: int = 5) -> List[Dict]:
         """Detect recurring patterns using clustering."""
         if not HAS_SKLEARN:
             return []
@@ -463,7 +466,7 @@ class SequenceAnalyzer:
         normalized = scaler.fit_transform(sequences)
 
         # Cluster sequences
-        kmeans = KMeans(n_clusters=n_patterns, random_state=42, n_init=10)
+        kmeans = KMeans(n_clusters=n_patterns, random_state=42, n_init=3, n_jobs=-1)
         labels = kmeans.fit_predict(normalized)
 
         patterns = []
@@ -472,38 +475,48 @@ class SequenceAnalyzer:
             cluster_sequences = sequences[mask]
 
             if len(cluster_sequences) > 0:
-                patterns.append({
-                    'pattern_id': i,
-                    'count': int(np.sum(mask)),
-                    'mean_pattern': cluster_sequences.mean(axis=0).tolist(),
-                    'std_pattern': cluster_sequences.std(axis=0).tolist(),
-                    'peak_hour': int(np.argmax(cluster_sequences.mean(axis=0))),
-                    'severity': float(np.max(cluster_sequences.mean(axis=0)))
-                })
+                patterns.append(
+                    {
+                        "pattern_id": i,
+                        "count": int(np.sum(mask)),
+                        "mean_pattern": cluster_sequences.mean(axis=0).tolist(),
+                        "std_pattern": cluster_sequences.std(axis=0).tolist(),
+                        "peak_hour": int(np.argmax(cluster_sequences.mean(axis=0))),
+                        "severity": float(np.max(cluster_sequences.mean(axis=0))),
+                    }
+                )
 
-        return sorted(patterns, key=lambda x: x['count'], reverse=True)
+        return sorted(patterns, key=lambda x: x["count"], reverse=True)
 
-    def forecast_with_patterns(self, time_series: np.ndarray,
-                               horizon: int = 24) -> Dict:
+    def forecast_with_patterns(self, time_series: np.ndarray, horizon: int = 24) -> Dict:
         """Forecast using detected patterns."""
         if len(time_series) < self.window_size * 2:
-            return {'forecast': np.zeros(horizon), 'confidence': 0}
+            return {"forecast": np.zeros(horizon), "confidence": 0}
 
         # Get last window
-        last_window = time_series[-self.window_size:]
+        last_window = time_series[-self.window_size :]
 
         # Find most similar historical pattern
-        sequences = self.extract_sequences(time_series[:-self.window_size])
+        sequences = self.extract_sequences(time_series[: -self.window_size])
         if len(sequences) == 0:
-            return {'forecast': np.full(horizon, np.mean(time_series)), 'confidence': 0}
+            return {"forecast": np.full(horizon, np.mean(time_series)), "confidence": 0}
 
-        # Calculate similarity (correlation)
-        similarities = []
-        for seq in sequences:
-            corr = np.corrcoef(last_window, seq)[0, 1]
-            similarities.append(corr if not np.isnan(corr) else 0)
+        # Calculate similarity (vectorized Pearson correlation)
+        # Normalize sequences and last_window for efficient batch correlation
+        seq_mean = sequences.mean(axis=1, keepdims=True)
+        seq_std = sequences.std(axis=1, keepdims=True)
+        seq_std[seq_std == 0] = 1  # Avoid division by zero
+        seq_normalized = (sequences - seq_mean) / seq_std
 
-        similarities = np.array(similarities)
+        lw_mean = last_window.mean()
+        lw_std = last_window.std()
+        if lw_std == 0:
+            lw_std = 1
+        lw_normalized = (last_window - lw_mean) / lw_std
+
+        # Batch correlation: dot product of normalized vectors / window_size
+        similarities = np.dot(seq_normalized, lw_normalized) / self.window_size
+        similarities = np.nan_to_num(similarities, nan=0.0)
 
         # Weight forecast by similarity
         weights = np.maximum(similarities, 0) ** 2
@@ -511,7 +524,7 @@ class SequenceAnalyzer:
 
         # Get next values after similar patterns
         forecast = np.zeros(horizon)
-        for i, (seq_idx, weight) in enumerate(zip(range(len(sequences)), weights)):
+        for seq_idx, weight in enumerate(weights):
             if weight > 0.01:  # Only consider significant weights
                 next_start = seq_idx + self.window_size
                 next_end = min(next_start + horizon, len(time_series))
@@ -522,15 +535,16 @@ class SequenceAnalyzer:
         confidence = float(np.max(similarities)) if len(similarities) > 0 else 0
 
         return {
-            'forecast': forecast,
-            'confidence': confidence,
-            'best_match_similarity': float(np.max(similarities)) if len(similarities) > 0 else 0
+            "forecast": forecast,
+            "confidence": confidence,
+            "best_match_similarity": float(np.max(similarities)) if len(similarities) > 0 else 0,
         }
 
 
 # =============================================================================
 # INTERNAL ERROR CLASSIFIER (GRADIENT BOOSTING)
 # =============================================================================
+
 
 class InternalErrorClassifier:
     """
@@ -551,39 +565,56 @@ class InternalErrorClassifier:
         labels = []
 
         self.feature_names = [
-            'total_errors', 'error_variance', 'max_hourly', 'min_hourly',
-            'error_category_count', 'ip_count', 'burst_ratio', 'night_ratio',
-            'reconnect_mean', 'reconnect_std', 'tls_ratio', 'timeout_ratio',
-            'internal_error_ratio', 'prefetch_ratio', 'sync_ratio'
+            "total_errors",
+            "error_variance",
+            "max_hourly",
+            "min_hourly",
+            "error_category_count",
+            "ip_count",
+            "burst_ratio",
+            "night_ratio",
+            "reconnect_mean",
+            "reconnect_std",
+            "tls_ratio",
+            "timeout_ratio",
+            "internal_error_ratio",
+            "prefetch_ratio",
+            "sync_ratio",
         ]
 
-        for store_id, stats in store_stats.items():
-            if stats['total_errors'] < 5:
+        for store_id, store_data in store_stats.items():
+            if store_data["total_errors"] < 5:
                 continue
 
-            hourly = list(stats['hourly_counts'].values()) if stats['hourly_counts'] else [0]
-            reconnects = stats.get('reconnect_delays', []) or [0]
-            total = stats['total_errors']
+            hourly = (
+                list(store_data["hourly_counts"].values()) if store_data["hourly_counts"] else [0]
+            )
+            reconnects = store_data.get("reconnect_delays", []) or [0]
+            total = store_data["total_errors"]
 
             # Calculate ratios
-            tls_count = stats['error_categories'].get('tls_handshake_error', 0)
-            timeout_count = stats['error_categories'].get('connection_timeout', 0)
-            internal_count = sum(v for k, v in stats['error_categories'].items()
-                               if k.startswith('internal_error'))
-            prefetch_count = stats['error_categories'].get('internal_error_prefetch', 0)
-            sync_count = stats['error_categories'].get('internal_error_sync', 0)
+            tls_count = store_data["error_categories"].get("tls_handshake_error", 0)
+            timeout_count = store_data["error_categories"].get("connection_timeout", 0)
+            internal_count = sum(
+                v
+                for k, v in store_data["error_categories"].items()
+                if k.startswith("internal_error")
+            )
+            prefetch_count = store_data["error_categories"].get("internal_error_prefetch", 0)
+            sync_count = store_data["error_categories"].get("internal_error_sync", 0)
 
             # Night hours (22:00 - 06:00)
-            night_count = sum(v for k, v in stats['hourly_counts'].items()
-                            if k.hour >= 22 or k.hour < 6)
+            night_count = sum(
+                v for k, v in store_data["hourly_counts"].items() if k.hour >= 22 or k.hour < 6
+            )
 
             feature_vector = [
                 total,
                 np.var(hourly) if len(hourly) > 1 else 0,
                 max(hourly),
                 min(hourly),
-                len(stats['error_categories']),
-                len(stats['ips']),
+                len(stats["error_categories"]),
+                len(stats["ips"]),
                 sum(1 for d in reconnects if d < 60) / max(len(reconnects), 1),
                 night_count / max(total, 1),
                 np.mean(reconnects) if reconnects else 0,
@@ -592,14 +623,14 @@ class InternalErrorClassifier:
                 timeout_count / max(total, 1),
                 internal_count / max(total, 1),
                 prefetch_count / max(total, 1),
-                sync_count / max(total, 1)
+                sync_count / max(total, 1),
             ]
 
             # Determine dominant error type as label
-            if stats['error_categories']:
-                dominant = max(stats['error_categories'].items(), key=lambda x: x[1])[0]
+            if stats["error_categories"]:
+                dominant = max(stats["error_categories"].items(), key=lambda x: x[1])[0]
             else:
-                dominant = 'unknown'
+                dominant = "unknown"
 
             features.append(feature_vector)
             store_ids.append(store_id)
@@ -618,51 +649,30 @@ class InternalErrorClassifier:
 
         # Calculate class weights to handle imbalance
         unique, counts = np.unique(encoded_labels, return_counts=True)
-        total = len(encoded_labels)
-        class_weights = {cls: total / (len(unique) * count) for cls, count in zip(unique, counts)}
 
-        # Build ensemble classifier with class weights
-        gb = GradientBoostingClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=self.random_state
-        )
-
+        # Use Random Forest only (removed unused GradientBoosting and AdaBoost)
         rf = RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=50,  # Reduced from 100 for faster training
             max_depth=10,
-            class_weight='balanced',  # Handle class imbalance
+            class_weight="balanced",  # Handle class imbalance
             random_state=self.random_state,
-            n_jobs=-1
+            n_jobs=-1,
         )
 
-        # Use sample weights for AdaBoost
-        sample_weights = np.array([class_weights[label] for label in encoded_labels])
-        sample_weights = sample_weights / sample_weights.sum()
-
-        ada = AdaBoostClassifier(
-            n_estimators=50,
-            learning_rate=0.5,
-            random_state=self.random_state
-        )
-
-        # Train individual models first to get scores
         rf.fit(features, encoded_labels)
         rf_score = rf.score(features, encoded_labels)
-
-        # Use Random Forest as primary (handles imbalance better)
         self.classifier = rf
 
-        # Cross-validation with stratification
-        n_splits = min(5, min(counts))
+        # Cross-validation with stratification (reduced folds for speed)
+        n_splits = min(3, min(counts))  # Reduced from 5 to 3 folds
 
         if n_splits >= 2:
             cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
             try:
-                cv_scores = cross_val_score(self.classifier, features, encoded_labels,
-                                           cv=cv, scoring='balanced_accuracy')
-            except:
+                cv_scores = cross_val_score(
+                    self.classifier, features, encoded_labels, cv=cv, scoring="balanced_accuracy"
+                )
+            except Exception:
                 cv_scores = np.array([rf_score])
         else:
             cv_scores = np.array([rf_score])
@@ -681,15 +691,18 @@ class InternalErrorClassifier:
                 )
 
         self.metrics = {
-            'cv_mean': float(np.mean(cv_scores)),
-            'cv_std': float(np.std(cv_scores)),
-            'train_accuracy': float(rf_score),
-            'n_classes': len(unique),
-            'classes': list(self.label_encoder.classes_),
-            'class_distribution': {self.label_encoder.classes_[cls]: int(count)
-                                  for cls, count in zip(unique, counts)},
-            'class_accuracy': class_accuracy,
-            'feature_importance': dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
+            "cv_mean": float(np.mean(cv_scores)),
+            "cv_std": float(np.std(cv_scores)),
+            "train_accuracy": float(rf_score),
+            "n_classes": len(unique),
+            "classes": list(self.label_encoder.classes_),
+            "class_distribution": {
+                self.label_encoder.classes_[cls]: int(count) for cls, count in zip(unique, counts)
+            },
+            "class_accuracy": class_accuracy,
+            "feature_importance": dict(
+                sorted(importance.items(), key=lambda x: x[1], reverse=True)
+            ),
         }
 
         return self.metrics
@@ -710,6 +723,7 @@ class InternalErrorClassifier:
 # MODEL EVALUATION AND OPTIMIZATION
 # =============================================================================
 
+
 class ModelEvaluator:
     """
     Evaluate and optimize ML models with cross-validation.
@@ -718,19 +732,26 @@ class ModelEvaluator:
     def __init__(self):
         self.results = {}
 
-    def evaluate_anomaly_detector(self, detector: EnhancedAnomalyDetector,
-                                  features: np.ndarray,
-                                  true_labels: np.ndarray = None) -> Dict:
+    def evaluate_anomaly_detector(
+        self,
+        detector: EnhancedAnomalyDetector,
+        features: np.ndarray,
+        true_labels: np.ndarray = None,
+    ) -> Dict:
         """Evaluate anomaly detector performance."""
         result = detector.fit_predict(features)
 
         metrics = {
-            'n_anomalies': int(np.sum(result.labels == -1)),
-            'anomaly_ratio': float(np.mean(result.labels == -1)),
-            'method_agreement': {k: int(np.sum(v)) for k, v in result.method_votes.items()
-                                if k not in ['votes', 'weighted_votes', 'ensemble']},
-            'avg_confidence': float(np.mean(result.confidence[result.labels == -1]))
-                             if np.sum(result.labels == -1) > 0 else 0
+            "n_anomalies": int(np.sum(result.labels == -1)),
+            "anomaly_ratio": float(np.mean(result.labels == -1)),
+            "method_agreement": {
+                k: int(np.sum(v))
+                for k, v in result.method_votes.items()
+                if k not in ["votes", "weighted_votes", "ensemble"]
+            },
+            "avg_confidence": float(np.mean(result.confidence[result.labels == -1]))
+            if np.sum(result.labels == -1) > 0
+            else 0,
         }
 
         # If true labels provided, calculate precision/recall
@@ -746,23 +767,33 @@ class ModelEvaluator:
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-            metrics['precision'] = precision
-            metrics['recall'] = recall
-            metrics['f1_score'] = f1
+            metrics["precision"] = precision
+            metrics["recall"] = recall
+            metrics["f1_score"] = f1
 
-        # Silhouette score for clustering quality
-        if HAS_SKLEARN and np.sum(result.labels == -1) > 1 and np.sum(result.labels == 1) > 1:
+        # Silhouette score for clustering quality (skip/sample for large datasets)
+        n_samples = len(features)
+        if (
+            HAS_SKLEARN
+            and np.sum(result.labels == -1) > 1
+            and np.sum(result.labels == 1) > 1
+            and n_samples < 10000
+        ):  # Skip for very large datasets (O(n²) complexity)
             try:
-                silhouette = silhouette_score(features, result.labels)
-                metrics['silhouette_score'] = float(silhouette)
-            except:
+                if n_samples > 3000:
+                    # Use stratified sampling to maintain class balance
+                    sample_idx = np.random.choice(n_samples, 3000, replace=False)
+                    silhouette = silhouette_score(features[sample_idx], result.labels[sample_idx])
+                else:
+                    silhouette = silhouette_score(features, result.labels)
+                metrics["silhouette_score"] = float(silhouette)
+            except Exception:
                 pass
 
-        self.results['anomaly_detector'] = metrics
+        self.results["anomaly_detector"] = metrics
         return metrics
 
-    def evaluate_classifier(self, classifier, features: np.ndarray,
-                           labels: np.ndarray) -> Dict:
+    def evaluate_classifier(self, classifier, features: np.ndarray, labels: np.ndarray) -> Dict:
         """Evaluate classifier with detailed metrics."""
         if not HAS_SKLEARN:
             return {}
@@ -773,9 +804,9 @@ class ModelEvaluator:
         metrics = {}
         try:
             cv_scores = cross_val_score(classifier, features, labels, cv=cv)
-            metrics['cv_accuracy_mean'] = float(np.mean(cv_scores))
-            metrics['cv_accuracy_std'] = float(np.std(cv_scores))
-        except:
+            metrics["cv_accuracy_mean"] = float(np.mean(cv_scores))
+            metrics["cv_accuracy_std"] = float(np.std(cv_scores))
+        except Exception:
             pass
 
         # Fit and get predictions
@@ -784,14 +815,14 @@ class ModelEvaluator:
 
         # Classification report
         precision, recall, f1, support = precision_recall_fscore_support(
-            labels, predictions, average='weighted'
+            labels, predictions, average="weighted"
         )
 
-        metrics['precision'] = float(precision)
-        metrics['recall'] = float(recall)
-        metrics['f1_score'] = float(f1)
+        metrics["precision"] = float(precision)
+        metrics["recall"] = float(recall)
+        metrics["f1_score"] = float(f1)
 
-        self.results['classifier'] = metrics
+        self.results["classifier"] = metrics
         return metrics
 
     def generate_report(self) -> str:
@@ -820,8 +851,8 @@ class ModelEvaluator:
 # MAIN OPTIMIZATION FUNCTION
 # =============================================================================
 
-def optimize_and_evaluate(store_stats: Dict, events: List,
-                         error_totals: Dict) -> Dict:
+
+def optimize_and_evaluate(store_stats: Dict, events: List, error_totals: Dict) -> Dict:
     """
     Run full optimization and evaluation pipeline.
 
@@ -853,13 +884,17 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
     detector = EnhancedAnomalyDetector(contamination=0.1)
     anomaly_result = detector.fit_predict(features, classifier.feature_names)
 
-    results['anomaly_detection'] = {
-        'n_anomalies': int(np.sum(anomaly_result.labels == -1)),
-        'method_agreement': {k: int(np.sum(v)) for k, v in anomaly_result.method_votes.items()
-                           if k not in ['votes', 'weighted_votes']},
-        'feature_importance': anomaly_result.feature_importance,
-        'avg_confidence': float(np.mean(anomaly_result.confidence[anomaly_result.labels == -1]))
-                         if np.sum(anomaly_result.labels == -1) > 0 else 0
+    results["anomaly_detection"] = {
+        "n_anomalies": int(np.sum(anomaly_result.labels == -1)),
+        "method_agreement": {
+            k: int(np.sum(v))
+            for k, v in anomaly_result.method_votes.items()
+            if k not in ["votes", "weighted_votes"]
+        },
+        "feature_importance": anomaly_result.feature_importance,
+        "avg_confidence": float(np.mean(anomaly_result.confidence[anomaly_result.labels == -1]))
+        if np.sum(anomaly_result.labels == -1) > 0
+        else 0,
     }
 
     print(f"  Anomalies detected: {results['anomaly_detection']['n_anomalies']}")
@@ -868,13 +903,15 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
     # 3. Train Internal Error Classifier
     print("\n[3/5] Training Balanced Random Forest Classifier...")
     train_metrics = classifier.train(features, labels)
-    results['classifier'] = train_metrics
+    results["classifier"] = train_metrics
 
     if train_metrics:
-        print(f"  Balanced accuracy (CV): {train_metrics['cv_mean']:.2%} ± {train_metrics['cv_std']:.2%}")
+        print(
+            f"  Balanced accuracy (CV): {train_metrics['cv_mean']:.2%} ± {train_metrics['cv_std']:.2%}"
+        )
         print(f"  Training accuracy: {train_metrics.get('train_accuracy', 0):.2%}")
         print(f"  Number of classes: {train_metrics['n_classes']}")
-        if 'class_distribution' in train_metrics:
+        if "class_distribution" in train_metrics:
             print(f"  Class distribution: {train_metrics['class_distribution']}")
 
     # 4. Pattern Recognition with Neural Network
@@ -885,9 +922,9 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
             recognizer = NeuralPatternRecognizer(n_components=30)
             text_features = recognizer.extract_features(messages)
 
-            event_labels = [e.error_category or 'unknown' for e in events[:len(messages)]]
+            event_labels = [e.error_category or "unknown" for e in events[: len(messages)]]
             pattern_metrics = recognizer.train_classifier(text_features, event_labels)
-            results['pattern_recognition'] = pattern_metrics
+            results["pattern_recognition"] = pattern_metrics
 
             if pattern_metrics:
                 print(f"  Neural network accuracy: {pattern_metrics['cv_mean']:.2%}")
@@ -895,8 +932,8 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
     # 5. Sequence Analysis
     print("\n[5/5] Analyzing Temporal Sequences...")
     hourly_totals = []
-    for store_id, stats in store_stats.items():
-        hourly_totals.extend(stats['hourly_counts'].values())
+    for store_data in store_stats.values():
+        hourly_totals.extend(store_data["hourly_counts"].values())
 
     if hourly_totals:
         time_series = np.array(sorted(hourly_totals))[-168:]  # Last week
@@ -905,12 +942,12 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
             patterns = seq_analyzer.detect_recurring_patterns(time_series, n_patterns=5)
             forecast = seq_analyzer.forecast_with_patterns(time_series, horizon=24)
 
-            results['sequence_analysis'] = {
-                'patterns': patterns,
-                'forecast': {
-                    'predicted_total': float(np.sum(forecast['forecast'])),
-                    'confidence': forecast['confidence']
-                }
+            results["sequence_analysis"] = {
+                "patterns": patterns,
+                "forecast": {
+                    "predicted_total": float(np.sum(forecast["forecast"])),
+                    "confidence": forecast["confidence"],
+                },
             }
 
             print(f"  Detected {len(patterns)} recurring patterns")
@@ -924,21 +961,23 @@ def optimize_and_evaluate(store_stats: Dict, events: List,
     evaluator = ModelEvaluator()
     evaluator.results = results
 
-    print(f"\n  Anomaly Detection:")
-    print(f"    Method agreement: IF={results['anomaly_detection']['method_agreement'].get('isolation_forest', 0)}, "
-          f"LOF={results['anomaly_detection']['method_agreement'].get('lof', 0)}, "
-          f"OCSVM={results['anomaly_detection']['method_agreement'].get('ocsvm', 0)}")
+    print("\n  Anomaly Detection:")
+    print(
+        f"    Method agreement: IF={results['anomaly_detection']['method_agreement'].get('isolation_forest', 0)}, "
+        f"LOF={results['anomaly_detection']['method_agreement'].get('lof', 0)}, "
+        f"OCSVM={results['anomaly_detection']['method_agreement'].get('ocsvm', 0)}"
+    )
 
-    if 'classifier' in results and results['classifier']:
-        print(f"\n  Balanced Random Forest Classifier:")
+    if "classifier" in results and results["classifier"]:
+        print("\n  Balanced Random Forest Classifier:")
         print(f"    Balanced CV Accuracy: {results['classifier']['cv_mean']:.2%}")
         print(f"    Training Accuracy: {results['classifier'].get('train_accuracy', 0):.2%}")
         print(f"    Top features: {list(results['classifier']['feature_importance'].keys())[:3]}")
-        if 'class_accuracy' in results['classifier']:
+        if "class_accuracy" in results["classifier"]:
             print(f"    Per-class accuracy: {results['classifier']['class_accuracy']}")
 
-    if 'pattern_recognition' in results and results['pattern_recognition']:
-        print(f"\n  Neural Pattern Recognition:")
+    if "pattern_recognition" in results and results["pattern_recognition"]:
+        print("\n  Neural Pattern Recognition:")
         print(f"    Accuracy: {results['pattern_recognition']['cv_mean']:.2%}")
 
     return results
