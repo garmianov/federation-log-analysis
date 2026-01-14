@@ -2,9 +2,10 @@
 Cascade failure detection and propagation analysis.
 """
 
-from datetime import datetime, timedelta
 from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Dict, List
+
 import numpy as np
 
 
@@ -41,7 +42,11 @@ class CascadeDetector:
             events_in_window = []
 
             j = i
-            while j < len(sorted_events) and sorted_events[j].timestamp and sorted_events[j].timestamp <= window_end:
+            while (
+                j < len(sorted_events)
+                and sorted_events[j].timestamp
+                and sorted_events[j].timestamp <= window_end
+            ):
                 if sorted_events[j].store_id:
                     stores_in_window.add(sorted_events[j].store_id)
                     events_in_window.append(sorted_events[j])
@@ -58,16 +63,22 @@ class CascadeDetector:
                     if e.machine:
                         machines.add(e.machine)
 
-                cascades.append({
-                    'start_time': sorted_events[i].timestamp,
-                    'end_time': events_in_window[-1].timestamp if events_in_window else sorted_events[i].timestamp,
-                    'store_count': len(stores_in_window),
-                    'stores': list(stores_in_window)[:10],  # Limit for display
-                    'event_count': len(events_in_window),
-                    'dominant_error': max(error_types.items(), key=lambda x: x[1])[0] if error_types else 'unknown',
-                    'machines_affected': len(machines),
-                    'is_server_wide': len(machines) == 1 and len(stores_in_window) > 10
-                })
+                cascades.append(
+                    {
+                        "start_time": sorted_events[i].timestamp,
+                        "end_time": events_in_window[-1].timestamp
+                        if events_in_window
+                        else sorted_events[i].timestamp,
+                        "store_count": len(stores_in_window),
+                        "stores": list(stores_in_window)[:10],  # Limit for display
+                        "event_count": len(events_in_window),
+                        "dominant_error": max(error_types.items(), key=lambda x: x[1])[0]
+                        if error_types
+                        else "unknown",
+                        "machines_affected": len(machines),
+                        "is_server_wide": len(machines) == 1 and len(stores_in_window) > 10,
+                    }
+                )
 
                 i = j  # Skip past this cascade
             else:
@@ -84,19 +95,19 @@ class CascadeDetector:
             return {}
 
         # Statistics
-        avg_stores = np.mean([c['store_count'] for c in cascades])
-        max_stores = max(c['store_count'] for c in cascades)
-        server_wide_count = sum(1 for c in cascades if c['is_server_wide'])
+        avg_stores = np.mean([c["store_count"] for c in cascades])
+        max_stores = max(c["store_count"] for c in cascades)
+        server_wide_count = sum(1 for c in cascades if c["is_server_wide"])
 
         # Error type analysis
         error_counts = defaultdict(int)
         for c in cascades:
-            error_counts[c['dominant_error']] += 1
+            error_counts[c["dominant_error"]] += 1
 
         return {
-            'total_cascades': len(cascades),
-            'avg_stores_affected': avg_stores,
-            'max_stores_in_cascade': max_stores,
-            'server_wide_cascades': server_wide_count,
-            'common_error_types': dict(error_counts)
+            "total_cascades": len(cascades),
+            "avg_stores_affected": avg_stores,
+            "max_stores_in_cascade": max_stores,
+            "server_wide_cascades": server_wide_count,
+            "common_error_types": dict(error_counts),
         }

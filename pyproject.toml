@@ -1,0 +1,161 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "federation-log-analysis"
+version = "2.0.0"
+description = "AI-powered toolkit for analyzing Genetec Security Center federation logs"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "openpyxl>=3.1.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.5.0",
+]
+all = [
+    "federation-log-analysis[mcp,dev]",
+]
+
+[project.scripts]
+federation-analyze = "analyze_federation_ai:main"
+
+[tool.setuptools.packages.find]
+include = ["federation_analyzer*"]
+
+# =============================================================================
+# Ruff Configuration (replaces black, flake8, isort)
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "UP",     # pyupgrade
+    "C90",    # mccabe complexity
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E402",   # module level import not at top (we use try/except for optional deps)
+    "B008",   # function call in default argument (common in dataclasses)
+    "B905",   # zip without strict= (Python 3.10+)
+    "UP035",  # deprecated typing imports (Dict, List) - keep for clarity
+    "UP006",  # use dict instead of Dict - keep for clarity
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore unused imports in files that check for optional dependencies
+# Ignore complexity for process_line (would need refactoring)
+"federation_analyzer/analyzer.py" = ["F401", "C901"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["federation_analyzer"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+# =============================================================================
+# Mypy Configuration (permissive for gradual adoption)
+# =============================================================================
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+no_implicit_optional = false
+check_untyped_defs = false
+# Disable strict checks for numpy/sklearn interop
+disable_error_code = [
+    "union-attr",      # Optional sklearn objects
+    "attr-defined",    # sklearn attribute access
+    "arg-type",        # numpy array type mismatches
+    "assignment",      # list/ndarray conversions
+    "var-annotated",   # missing annotations in existing code
+    "return-value",    # Optional return types
+    "call-overload",   # numpy indexing
+]
+exclude = [
+    "tests/",
+    "build/",
+    "dist/",
+    "ai_optimizer.py",
+    "analyze_.*\\.py",
+    "health_events_analyzer.py",
+    "federation_mcp_server.py",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "sklearn.*",
+    "scipy.*",
+    "pandas.*",
+    "numpy.*",
+    "mcp.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ai_optimizer"
+ignore_errors = true
+
+# =============================================================================
+# Pytest Configuration (migrated from pytest.ini)
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "requires_sklearn: marks tests that require scikit-learn",
+]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+[tool.coverage.run]
+source = ["federation_analyzer"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

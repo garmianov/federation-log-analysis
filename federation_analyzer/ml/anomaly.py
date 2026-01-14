@@ -3,19 +3,22 @@ Ensemble anomaly detection using multiple algorithms.
 """
 
 from typing import Dict, List, Tuple
+
 import numpy as np
 
 try:
-    from sklearn.ensemble import IsolationForest
     from sklearn.cluster import DBSCAN
+    from sklearn.ensemble import IsolationForest
     from sklearn.neighbors import LocalOutlierFactor, NearestNeighbors
     from sklearn.preprocessing import StandardScaler
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
 
 try:
     from scipy import stats
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -54,7 +57,7 @@ class AdvancedAnomalyDetector:
         if_labels = self.isolation_forest.fit_predict(scaled)
         if_anomalies = (if_labels == -1).astype(int)
         votes += if_anomalies
-        method_scores['isolation_forest'] = if_anomalies
+        method_scores["isolation_forest"] = if_anomalies
 
         # 2. Local Outlier Factor
         self.lof = LocalOutlierFactor(
@@ -63,7 +66,7 @@ class AdvancedAnomalyDetector:
         lof_labels = self.lof.fit_predict(scaled)
         lof_anomalies = (lof_labels == -1).astype(int)
         votes += lof_anomalies
-        method_scores['lof'] = lof_anomalies
+        method_scores["lof"] = lof_anomalies
 
         # 3. DBSCAN (outliers are labeled -1)
         # Automatically find eps using k-distance
@@ -78,20 +81,20 @@ class AdvancedAnomalyDetector:
         db_labels = self.dbscan.fit_predict(scaled)
         db_anomalies = (db_labels == -1).astype(int)
         votes += db_anomalies
-        method_scores['dbscan'] = db_anomalies
+        method_scores["dbscan"] = db_anomalies
 
         # 4. Statistical (Z-score)
         z_scores = np.abs(stats.zscore(features, axis=0)) if HAS_SCIPY else np.zeros_like(features)
         stat_anomalies = (np.max(z_scores, axis=1) > 3).astype(int)
         votes += stat_anomalies
-        method_scores['statistical'] = stat_anomalies
+        method_scores["statistical"] = stat_anomalies
 
         # Ensemble: anomaly if >= 2 methods agree
         ensemble_labels = (votes >= 2).astype(int) * -1  # -1 for anomaly
         ensemble_labels[ensemble_labels == 0] = 1  # 1 for normal
 
-        method_scores['votes'] = votes
-        method_scores['ensemble'] = (ensemble_labels == -1).astype(int)
+        method_scores["votes"] = votes
+        method_scores["ensemble"] = (ensemble_labels == -1).astype(int)
 
         return ensemble_labels, method_scores
 
@@ -111,8 +114,8 @@ class AdvancedAnomalyDetector:
         s_neg = np.zeros(len(time_series))
 
         for i in range(1, len(time_series)):
-            s_pos[i] = max(0, s_pos[i-1] + (time_series[i] - mean) / std - 0.5)
-            s_neg[i] = max(0, s_neg[i-1] - (time_series[i] - mean) / std - 0.5)
+            s_pos[i] = max(0, s_pos[i - 1] + (time_series[i] - mean) / std - 0.5)
+            s_neg[i] = max(0, s_neg[i - 1] - (time_series[i] - mean) / std - 0.5)
 
         # Find points exceeding threshold
         change_points = []

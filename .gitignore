@@ -1,9 +1,45 @@
+# Byte-compiled / optimized files
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Build / Distribution
 *.egg-info/
+*.egg
 dist/
 build/
+*.whl
+
+# Type checking / Linting
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment / Config
+.env
+.env.local
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
