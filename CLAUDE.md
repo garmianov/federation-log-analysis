@@ -10,15 +10,23 @@ The tools analyze logs from federated Security Center deployments (specifically 
 
 ## Key Components
 
-### Analyzers (run directly)
-- **analyze_federation_ai.py** - Main AI-powered federation log analyzer. Supports ZIP files, .log files, or directories. Run with `python analyze_federation_ai.py [path]`
-- **health_events_analyzer.py** - Analyzes Excel health event exports. Run with `python health_events_analyzer.py [path.xlsx]`
-- **analyze_store_reasons.py** - Focused analysis of disconnect reasons per store
+### Analyzers - Which Version to Use
 
-### Supporting Versions
-- **analyze_federation_logs.py** - Original v1 analyzer with parallel processing
-- **analyze_federation_logs_v2.py** - Optimized v2 with fast pattern matching
-- **analyze_federation_logs_v3.py** - Memory-efficient streaming version using Welford's algorithm
+**Recommended: analyze_federation_ai.py** (Primary)
+- Full-featured AI-powered analysis with anomaly detection, clustering, forecasting
+- Best for: Daily analysis, investigations, comprehensive reports
+- Run: `python analyze_federation_ai.py [path]`
+
+**For Very Large Datasets: analyze_federation_logs_v3.py**
+- Memory-efficient streaming with Welford's algorithm
+- Best for: 10M+ lines, constrained memory environments
+- Run: `python analyze_federation_logs_v3.py [path]`
+
+**Other Analyzers:**
+- **health_events_analyzer.py** - Analyzes Excel health event exports
+- **analyze_store_reasons.py** - Focused disconnect reason analysis per store
+- **analyze_federation_logs_v2.py** - Optimized v2, faster than v1 (20-30% speed improvement)
+- **analyze_federation_logs.py** - Original v1 (legacy, superseded by v2)
 
 ### MCP Server
 - **federation_mcp_server.py** - Model Context Protocol server exposing analysis tools. Configure in Claude Desktop using the pattern in `claude_desktop_config.example.json`
@@ -46,6 +54,21 @@ python health_events_analyzer.py "/path/to/Health history.xlsx"
 - **Clustering**: K-Means for grouping stores by error behavior patterns
 - **Time Series**: STL-style decomposition, Holt-Winters forecasting, CUSUM change point detection
 - **Root Cause**: Bayesian inference with prior probabilities for network/hardware/certificate issues
+
+### AI Optimizer Module (ai_optimizer.py)
+
+Advanced ML module providing enhanced anomaly detection and pattern recognition.
+
+**Classes:**
+- `EnhancedAnomalyDetector` - Ensemble of Isolation Forest, LOF, One-Class SVM, DBSCAN, and statistical methods (Z-score, IQR, MAD) with weighted voting
+- `NeuralPatternRecognizer` - TF-IDF + MLP classifier for error message classification
+- `SequenceAnalyzer` - Temporal pattern detection with K-Means clustering and forecasting
+- `InternalErrorClassifier` - Random Forest classifier for error type prediction
+- `ModelEvaluator` - Cross-validation and performance metrics
+
+**Integration:** Called via `optimize_and_evaluate(store_stats, events, error_totals)` in analyze_federation_ai.py step [8/8].
+
+**Dependencies:** Requires scikit-learn ≥1.3.0, scipy ≥1.11.0 (graceful degradation if unavailable).
 
 ### Data Flow
 1. Log files parsed for timestamps, store IDs (pattern: `Store[\s_](\d{4,5})`), and error categories

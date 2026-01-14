@@ -14,35 +14,35 @@ This document outlines a comprehensive development plan for the Federation Log A
 - ✅ Flexible input handling (ZIP files, directories, individual log files)
 
 ### Issues & Technical Debt
-- ⚠️ Multiple versions of analyzers (v1, v2, v3) - unclear which are actively maintained
-- ⚠️ Hardcoded paths in `analyze_store_reasons.py` (line 14)
-- ⚠️ `ai_optimizer.py` module not documented in CLAUDE.md
+- ✅ ~~Multiple versions of analyzers (v1, v2, v3) - unclear which are actively maintained~~ → Documented in CLAUDE.md
+- ✅ ~~Hardcoded paths in `analyze_store_reasons.py` (line 14)~~ → Fixed with flexible path handling
+- ✅ ~~`ai_optimizer.py` module not documented in CLAUDE.md~~ → Documented
+- ✅ ~~No version control visibility (no .git directory in snapshot)~~ → Git repo established
 - ⚠️ No visible test suite
-- ⚠️ No version control visibility (no .git directory in snapshot)
 - ⚠️ Large monolithic files (analyze_federation_ai.py has 2000+ lines)
 
 ## Phase 1: Code Organization & Cleanup (Priority: High)
 
 ### 1.1 Version Management
-- [ ] **Decision Required**: Determine status of v1, v2, v3 analyzers
-  - Options:
-    - Archive/remove deprecated versions
-    - Document which version to use for what purpose
-    - Consolidate best features into main analyzer
+- [x] **Decision Made**: Document which version to use for what purpose
+  - AI version: Primary for daily use and investigations
+  - v3: For very large datasets (10M+ lines)
+  - v2: Fast alternative (legacy)
+  - v1: Legacy reference only
 - [ ] Create `archive/` directory for deprecated code if keeping for reference
-- [ ] Update CLAUDE.md with clear guidance on which analyzer to use
+- [x] Update CLAUDE.md with clear guidance on which analyzer to use
 
 ### 1.2 Remove Hardcoded Paths
-- [ ] Fix hardcoded path in `analyze_store_reasons.py:14`
-  - Make it configurable via command-line argument or environment variable
-  - Update to use `~/Downloads` default pattern like other analyzers
-- [ ] Audit all files for hardcoded paths
+- [x] Fix hardcoded path in `analyze_store_reasons.py:14`
+  - Made configurable via command-line argument
+  - Updated to use `~/Downloads` default pattern like other analyzers
+- [x] Audit all files for hardcoded paths (fixed in v1, v2, v3)
 - [ ] Create configuration file support (optional config.yaml/config.json)
 
 ### 1.3 Documentation Updates
-- [ ] Document `ai_optimizer.py` module in CLAUDE.md
-  - Explain its purpose and relationship to main analyzers
-  - Document which analyzers use it
+- [x] Document `ai_optimizer.py` module in CLAUDE.md
+  - Explained its purpose and relationship to main analyzers
+  - Documented classes and integration point
 - [ ] Add architecture diagram (ASCII art or Mermaid)
 - [ ] Document data flow and ML pipeline
 - [ ] Add examples section with sample outputs
