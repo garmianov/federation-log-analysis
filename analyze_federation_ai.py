@@ -51,6 +51,18 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
+# Import AI optimizer module
+try:
+    from ai_optimizer import (
+        EnhancedAnomalyDetector, NeuralPatternRecognizer,
+        SequenceAnalyzer, InternalErrorClassifier,
+        ModelEvaluator, optimize_and_evaluate
+    )
+    HAS_AI_OPTIMIZER = True
+except ImportError:
+    HAS_AI_OPTIMIZER = False
+    print("Note: AI optimizer module not found. Run from project directory.")
+
 # =============================================================================
 # PATTERNS FOR FEDERATION LOG PARSING
 # =============================================================================
@@ -118,7 +130,52 @@ ERROR_PATTERNS = {
         'Scheduling reconnection',
         'reconnect attempt',
         'startDelay'
+    ],
+    # Internal Error patterns - application-layer failures
+    'internal_error_logon': [
+        'result Failure () while at step Waiting for message',
+        'LogonFailedEventArgs.FailureCode=Failure',
+        'OnFederatedProxy_LogonFailed'
+    ],
+    'internal_error_prefetch': [
+        'prefetch failed',
+        'Prefetch query failed',
+        'The prefetch failed (Base)',
+        'The prefetch failed (DirectoryRole)',
+        'The prefetch failed (DirectoryServers)'
+    ],
+    'internal_error_directory': [
+        'not currently connected to the Directory',
+        'Directory and cannot handle your request'
+    ],
+    'internal_error_sync': [
+        'Entity synchronization failed',
+        'Aborting synchronization',
+        'Failed to map local and remote custom fields'
+    ],
+    'internal_error_tls_auth': [
+        'TLS authentication failed',
+        'TLS authentication failed when connecting'
     ]
+}
+
+# Internal Error sub-type patterns for detailed classification
+INTERNAL_ERROR_SUBTYPES = {
+    'empty_redirection': re.compile(r'result Failure \(\) while at step Waiting for message: RedirectionResponseMessage'),
+    'empty_logon': re.compile(r'result Failure \(\) while at step Waiting for message: LogOnResultMessage'),
+    'prefetch_base': re.compile(r'prefetch failed \(Base\)', re.I),
+    'prefetch_directory_role': re.compile(r'prefetch failed \(DirectoryRole\)', re.I),
+    'prefetch_directory_servers': re.compile(r'prefetch failed \(DirectoryServers\)', re.I),
+    'directory_disconnected': re.compile(r'not currently connected to the Directory'),
+    'tls_auth_failed': re.compile(r'TLS authentication failed'),
+    'handshake_error': re.compile(r'error completing the handshake'),
+    'read_timeout': re.compile(r'Read timeout occured'),
+    'transport_read_error': re.compile(r'Unable to read data from the transport connection'),
+    'sync_aborted': re.compile(r'Aborting synchronization'),
+    'entity_sync_failed': re.compile(r'Entity synchronization failed'),
+    'custom_fields_failed': re.compile(r'Failed to map local and remote custom fields'),
+    'logon_failed_event': re.compile(r'OnFederatedProxy_LogonFailed.*FailureCode=Failure'),
+    'security_token_error': re.compile(r'Raising WFSecurityTokensManager')
 }
 
 # Severity indicators
@@ -787,7 +844,7 @@ class RecommendationEngine:
 class FederationEvent:
     """Represents a single federation event."""
     __slots__ = ('timestamp', 'store_id', 'fed_group', 'machine', 'event_type',
-                 'error_category', 'severity', 'ip', 'port', 'message')
+                 'error_category', 'severity', 'ip', 'port', 'message', 'internal_error_subtype')
 
     def __init__(self):
         self.timestamp = None
@@ -800,6 +857,7 @@ class FederationEvent:
         self.ip = None
         self.port = None
         self.message = None
+        self.internal_error_subtype = None
 
 
 class OnlineStats:
@@ -844,6 +902,7 @@ class FederationLogAnalyzer:
         self.store_stats = defaultdict(lambda: {
             'total_errors': 0,
             'error_categories': defaultdict(int),
+            'internal_error_subtypes': defaultdict(int),
             'timestamps': [],
             'ips': set(),
             'fed_groups': set(),
@@ -851,6 +910,7 @@ class FederationLogAnalyzer:
             'hourly_counts': defaultdict(int),
             'reconnect_delays': []
         })
+        self.internal_error_totals = defaultdict(int)
         self.machine_stats = defaultdict(lambda: {
             'total_errors': 0,
             'stores': set(),
@@ -895,6 +955,13 @@ class FederationLogAnalyzer:
                 break
 
         return error_category, severity
+
+    def classify_internal_error(self, line: str) -> Optional[str]:
+        """Classify internal error subtype for detailed analysis."""
+        for subtype, pattern in INTERNAL_ERROR_SUBTYPES.items():
+            if pattern.search(line):
+                return subtype
+        return None
 
     def process_line(self, line: str, fed_group: str = None) -> Optional[str]:
         """Process a single log line."""
@@ -950,6 +1017,11 @@ class FederationLogAnalyzer:
         if fg_match:
             fed_group = fg_match.group(1)
 
+        # Classify internal error subtype if applicable
+        internal_subtype = None
+        if error_category and error_category.startswith('internal_error'):
+            internal_subtype = self.classify_internal_error(line)
+
         # Build event
         event = FederationEvent()
         event.timestamp = timestamp
@@ -961,8 +1033,13 @@ class FederationLogAnalyzer:
         event.ip = ip
         event.port = port
         event.message = line[:300]
+        event.internal_error_subtype = internal_subtype
 
         self.events.append(event)
+
+        # Track internal error subtypes
+        if internal_subtype:
+            self.internal_error_totals[internal_subtype] += 1
 
         # Calculate hour key for time-based statistics
         hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
@@ -978,6 +1055,8 @@ class FederationLogAnalyzer:
             stats['timestamps'].append(timestamp)
             if error_category:
                 stats['error_categories'][error_category] += 1
+            if internal_subtype:
+                stats['internal_error_subtypes'][internal_subtype] += 1
             if ip:
                 stats['ips'].add(ip)
             if fed_group:
@@ -1257,6 +1336,144 @@ class FederationLogAnalyzer:
                       f"Total: {total_cat:,}")
 
         return {'category_totals': dict(self.error_category_totals)}
+
+    def analyze_internal_errors(self) -> Dict:
+        """Analyze Internal Errors in detail - application-layer failures."""
+        print("\n" + "=" * 70)
+        print("INTERNAL ERROR ANALYSIS (Application-Layer Failures)")
+        print("=" * 70)
+
+        if not self.internal_error_totals:
+            print("\nNo Internal Errors detected in the logs.")
+            return {}
+
+        # Calculate total internal errors
+        total_internal = sum(self.internal_error_totals.values())
+        total_all = sum(self.error_category_totals.values())
+        internal_pct = 100 * total_internal / total_all if total_all > 0 else 0
+
+        print(f"\nInternal Error Summary:")
+        print(f"  Total Internal Errors: {total_internal:,} ({internal_pct:.1f}% of all errors)")
+
+        # Sub-type breakdown
+        print(f"\n{'Sub-Type':<30}{'Count':<12}{'%':<10}{'Bar'}")
+        print("-" * 65)
+
+        subtype_descriptions = {
+            'empty_redirection': 'vNVR not responding (RedirectionResponseMessage)',
+            'empty_logon': 'vNVR not responding (LogOnResultMessage)',
+            'prefetch_base': 'Base entity prefetch failed',
+            'prefetch_directory_role': 'DirectoryRole prefetch failed',
+            'prefetch_directory_servers': 'DirectoryServers prefetch failed',
+            'directory_disconnected': 'vNVR not connected to Directory',
+            'tls_auth_failed': 'TLS authentication failed',
+            'handshake_error': 'TLS handshake error',
+            'read_timeout': 'Read timeout on connection',
+            'transport_read_error': 'Transport connection read error',
+            'sync_aborted': 'Synchronization aborted',
+            'entity_sync_failed': 'Entity synchronization failed',
+            'custom_fields_failed': 'Custom fields mapping failed',
+            'logon_failed_event': 'Logon failed event triggered',
+            'security_token_error': 'Security token manager error'
+        }
+
+        for subtype, count in sorted(self.internal_error_totals.items(),
+                                     key=lambda x: x[1], reverse=True):
+            pct = 100 * count / total_internal if total_internal > 0 else 0
+            bar = '█' * int(pct / 2.5)
+            desc = subtype_descriptions.get(subtype, subtype)
+            print(f"{desc[:30]:<30}{count:<12}{pct:.1f}%     {bar}")
+
+        # Group subtypes into categories for diagnosis
+        print(f"\n--- INTERNAL ERROR DIAGNOSIS GROUPS ---")
+
+        unresponsive_count = sum(self.internal_error_totals.get(s, 0)
+                                 for s in ['empty_redirection', 'empty_logon'])
+        prefetch_count = sum(self.internal_error_totals.get(s, 0)
+                            for s in ['prefetch_base', 'prefetch_directory_role', 'prefetch_directory_servers'])
+        tls_count = sum(self.internal_error_totals.get(s, 0)
+                       for s in ['tls_auth_failed', 'handshake_error'])
+        network_count = sum(self.internal_error_totals.get(s, 0)
+                           for s in ['read_timeout', 'transport_read_error'])
+        sync_count = sum(self.internal_error_totals.get(s, 0)
+                        for s in ['sync_aborted', 'entity_sync_failed', 'custom_fields_failed'])
+
+        print(f"\n{'Diagnosis Group':<35}{'Count':<10}{'%':<10}{'Action'}")
+        print("-" * 80)
+
+        groups = [
+            ('vNVR Unresponsive', unresponsive_count, 'Restart vNVR service'),
+            ('Data Prefetch Failures', prefetch_count, 'Check vNVR database/resources'),
+            ('TLS/Certificate Issues', tls_count, 'Verify certificates'),
+            ('Network Transport Issues', network_count, 'Check network connectivity'),
+            ('Sync/Data Issues', sync_count, 'Review entity configuration'),
+        ]
+
+        for group, count, action in groups:
+            if count > 0:
+                pct = 100 * count / total_internal if total_internal > 0 else 0
+                bar = '█' * int(pct / 5)
+                print(f"{group:<35}{count:<10}{pct:.1f}%     {bar}  → {action}")
+
+        # Stores most affected by internal errors
+        print(f"\n--- TOP STORES WITH INTERNAL ERRORS ---")
+        print(f"{'Store':<10}{'Total IE':<12}{'Dominant Sub-Type':<35}{'IPs'}")
+        print("-" * 80)
+
+        stores_with_internal = []
+        for store_id, stats in self.store_stats.items():
+            ie_total = sum(stats['internal_error_subtypes'].values())
+            if ie_total > 0:
+                dominant = max(stats['internal_error_subtypes'].items(),
+                              key=lambda x: x[1])[0] if stats['internal_error_subtypes'] else 'unknown'
+                stores_with_internal.append({
+                    'store_id': store_id,
+                    'internal_errors': ie_total,
+                    'dominant_subtype': dominant,
+                    'ips': list(stats['ips'])[:2]
+                })
+
+        stores_with_internal.sort(key=lambda x: x['internal_errors'], reverse=True)
+
+        for store in stores_with_internal[:20]:
+            desc = subtype_descriptions.get(store['dominant_subtype'], store['dominant_subtype'])[:35]
+            ips = ', '.join(store['ips']) if store['ips'] else 'N/A'
+            print(f"{store['store_id']:<10}{store['internal_errors']:<12}{desc:<35}{ips[:20]}")
+
+        # Generate recommendations based on internal error patterns
+        print(f"\n--- INTERNAL ERROR RECOMMENDATIONS ---")
+
+        if unresponsive_count > total_internal * 0.3:
+            print(f"\n⚠️  HIGH UNRESPONSIVE vNVR RATE ({unresponsive_count:,} events)")
+            print(f"   → Schedule vNVR service restarts for affected stores")
+            print(f"   → Check vNVR CPU/Memory utilization")
+            print(f"   → Review vNVR logs on store systems")
+
+        if prefetch_count > total_internal * 0.2:
+            print(f"\n⚠️  DATA PREFETCH FAILURES ({prefetch_count:,} events)")
+            print(f"   → Check vNVR database health and disk space")
+            print(f"   → Review entity counts in affected stores")
+            print(f"   → Consider increasing prefetch timeout settings")
+
+        if tls_count > total_internal * 0.1:
+            print(f"\n⚠️  TLS/CERTIFICATE ISSUES ({tls_count:,} events)")
+            print(f"   → Audit certificate expiration dates")
+            print(f"   → Verify TLS version compatibility")
+            print(f"   → Check certificate chain validity")
+
+        return {
+            'total_internal_errors': total_internal,
+            'percentage_of_all': internal_pct,
+            'subtypes': dict(self.internal_error_totals),
+            'stores_affected': stores_with_internal,
+            'diagnosis_groups': {
+                'unresponsive': unresponsive_count,
+                'prefetch': prefetch_count,
+                'tls': tls_count,
+                'network': network_count,
+                'sync': sync_count
+            }
+        }
 
     def analyze_store_clusters(self) -> Dict:
         """Cluster stores by error behavior."""
@@ -1636,26 +1853,39 @@ class FederationLogAnalyzer:
         results = {}
 
         # Run all analyses
-        print("\n[1/6] Analyzing error patterns...")
+        print("\n[1/8] Analyzing error patterns...")
         self.analyze_error_patterns()
 
-        print("\n[2/6] Running ensemble anomaly detection...")
+        print("\n[2/8] Analyzing Internal Errors...")
+        results['internal_errors'] = self.analyze_internal_errors()
+
+        print("\n[3/8] Running ensemble anomaly detection...")
         results['anomalies'] = self.analyze_anomalies()
 
-        print("\n[3/6] Clustering stores by behavior...")
+        print("\n[4/8] Clustering stores by behavior...")
         results['clusters'] = self.analyze_store_clusters()
 
-        print("\n[4/6] Analyzing time series and forecasting...")
+        print("\n[5/8] Analyzing time series and forecasting...")
         results['time_series'] = self.analyze_time_series()
 
-        print("\n[5/6] Detecting cascade failures...")
+        print("\n[6/8] Detecting cascade failures...")
         results['cascades'] = self.analyze_cascades()
 
-        print("\n[6/6] Performing root cause analysis...")
+        print("\n[7/8] Performing root cause analysis...")
         root_cause = self.analyze_root_causes()
         results['root_causes'] = root_cause.get('root_causes', [])
         results['machine_health'] = root_cause.get('machine_health', {})
         results['predictions'] = results['time_series']
+
+        # Run AI Optimization if available
+        if HAS_AI_OPTIMIZER:
+            print("\n[8/8] Running AI Model Optimization...")
+            results['ai_optimization'] = optimize_and_evaluate(
+                self.store_stats, self.events, self.error_category_totals
+            )
+        else:
+            print("\n[8/8] AI Optimizer not available - skipping advanced ML")
+            results['ai_optimization'] = {}
 
         # Generate actionable recommendations
         print("\n" + "=" * 70)
