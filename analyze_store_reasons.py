@@ -6,12 +6,11 @@ Optimized with parallel processing and efficient pattern matching.
 
 import os
 import re
+import sys
 from collections import defaultdict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-
-LOG_DIR = "/Users/gancho/Library/CloudStorage/OneDrive-GenetecInc/Documents/Starbucks/Federation reconnects investigations/MS58138FedLogs/logs1"
 
 # Patterns to extract store and reason
 STORE_PATTERN = re.compile(r'Store[\s_](\d{4,5})(?:\s*\([^)]*\))?')
@@ -119,11 +118,12 @@ class StoreReasonAnalyzer:
                         'line': line[:300]
                     })
 
-    def scan_logs(self, max_workers=4):
+    def scan_logs(self, log_dir, max_workers=4):
         """Scan logs with parallel processing."""
-        print("Scanning logs for store-specific disconnect reasons...\n", flush=True)
+        print(f"Scanning logs for store-specific disconnect reasons...\n", flush=True)
+        print(f"Directory: {log_dir}\n", flush=True)
 
-        files = sorted([os.path.join(LOG_DIR, f) for f in os.listdir(LOG_DIR) if f.endswith('.log')])
+        files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith('.log')])
 
         # Process files in parallel
         processed = 0
@@ -220,9 +220,52 @@ class StoreReasonAnalyzer:
         print("=" * 80, flush=True)
 
 
+def find_log_directory():
+    """Auto-discover log directory in ~/Downloads."""
+    downloads = os.path.expanduser("~/Downloads")
+
+    if not os.path.exists(downloads):
+        return None
+
+    # Look for directories containing federation logs
+    for item in os.listdir(downloads):
+        path = os.path.join(downloads, item)
+        if os.path.isdir(path):
+            # Check if directory contains .log files with federation patterns
+            try:
+                log_files = [f for f in os.listdir(path) if f.endswith('.log')]
+                if log_files:
+                    # Check first few files for federation-related content
+                    for lf in log_files[:3]:
+                        with open(os.path.join(path, lf), 'r', errors='replace') as f:
+                            content = f.read(5000)
+                            if 'Store' in content or 'SBUXSCRoleGroup' in content:
+                                return path
+            except (PermissionError, OSError):
+                continue
+
+    return None
+
+
 def main():
+    # Handle command-line arguments
+    if len(sys.argv) > 1:
+        log_dir = os.path.expanduser(sys.argv[1])
+        if not os.path.isdir(log_dir):
+            print(f"Error: '{log_dir}' is not a valid directory")
+            sys.exit(1)
+    else:
+        # Auto-discover in ~/Downloads
+        log_dir = find_log_directory()
+        if not log_dir:
+            print("Usage: python analyze_store_reasons.py <log_directory>")
+            print("\nNo federation log directory found in ~/Downloads.")
+            print("Please specify a directory containing .log files.")
+            sys.exit(1)
+        print(f"Auto-discovered log directory: {log_dir}\n")
+
     analyzer = StoreReasonAnalyzer()
-    analyzer.scan_logs()
+    analyzer.scan_logs(log_dir)
     analyzer.generate_report()
 
 

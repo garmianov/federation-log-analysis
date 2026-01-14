@@ -15,11 +15,6 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-# Configuration
-LOG_DIRS = [
-    "/Users/gancho/Library/CloudStorage/OneDrive-GenetecInc/Documents/Starbucks/Federation reconnects investigations/MS58138Baseline 1/Logs",
-    "/Users/gancho/Library/CloudStorage/OneDrive-GenetecInc/Documents/Starbucks/Federation reconnects investigations/MS58138FedLogs/logs1"
-]
 
 # Compiled patterns for efficiency
 STORE_PATTERN = re.compile(r'Store[\s_](\d{4,5})(?:\s*\([^)]*\))?')
@@ -174,14 +169,14 @@ class FastLogAnalyzer:
         except Exception as e:
             print(f"  Error processing zip {os.path.basename(zip_path)}: {e}", file=sys.stderr)
 
-    def scan_all(self, max_workers=4):
+    def scan_all(self, log_dirs, max_workers=4):
         """Scan all log directories with parallel processing."""
         print("=" * 80, flush=True)
         print("SCANNING LOG DIRECTORIES (Parallel)", flush=True)
         print("=" * 80, flush=True)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            for log_dir in LOG_DIRS:
+            for log_dir in log_dirs:
                 if not os.path.exists(log_dir):
                     print(f"Warning: {log_dir} not found", flush=True)
                     continue
@@ -494,12 +489,63 @@ class FastLogAnalyzer:
         print("=" * 80, flush=True)
 
 
+def find_log_paths():
+    """Auto-discover federation log files/directories in ~/Downloads."""
+    downloads = os.path.expanduser("~/Downloads")
+    paths = []
+
+    if not os.path.exists(downloads):
+        return paths
+
+    for item in os.listdir(downloads):
+        full_path = os.path.join(downloads, item)
+
+        # Check ZIP files
+        if item.endswith('.zip') and ('Fed' in item or 'Base' in item or 'Log' in item):
+            paths.append(full_path)
+        # Check directories containing .log files
+        elif os.path.isdir(full_path):
+            try:
+                log_files = [f for f in os.listdir(full_path) if f.endswith('.log')]
+                if log_files:
+                    paths.append(full_path)
+            except (PermissionError, OSError):
+                continue
+
+    # Sort by modification time (newest first)
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return paths
+
+
 def main():
     print("Security Center Federation Log Analyzer v2", flush=True)
     print("Optimized for large log sets\n", flush=True)
 
+    # Handle command-line arguments
+    if len(sys.argv) > 1:
+        log_dirs = [os.path.expanduser(arg) for arg in sys.argv[1:]]
+        # Validate paths
+        for path in log_dirs:
+            if not os.path.exists(path):
+                print(f"Error: Path not found: {path}")
+                sys.exit(1)
+    else:
+        # Auto-discover in ~/Downloads
+        log_dirs = find_log_paths()
+        if not log_dirs:
+            print("Usage: python analyze_federation_logs_v2.py <path1> [path2] ...")
+            print("\nNo federation log files found in ~/Downloads.")
+            print("Please specify directories or ZIP files containing logs.")
+            sys.exit(1)
+        print(f"Auto-discovered {len(log_dirs)} path(s):")
+        for p in log_dirs[:5]:
+            print(f"  - {p}")
+        if len(log_dirs) > 5:
+            print(f"  ... and {len(log_dirs) - 5} more")
+        print()
+
     analyzer = FastLogAnalyzer()
-    analyzer.scan_all()
+    analyzer.scan_all(log_dirs)
     analyzer.generate_report()
 
 
