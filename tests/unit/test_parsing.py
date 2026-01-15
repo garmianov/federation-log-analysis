@@ -8,8 +8,6 @@ Tests the core parsing logic including:
 - Error classification
 """
 
-import pytest
-import re
 from datetime import datetime
 
 
@@ -56,35 +54,40 @@ class TestStoreIdExtraction:
 
     def test_store_id_with_space(self):
         """Test 'Store 51389' format."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
+
         match = STORE_PATTERN.search("Store 51389 connected")
         assert match is not None
         assert match.group(1) == "51389"
 
     def test_store_id_with_underscore(self):
         """Test 'Store_12345' format."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
+
         match = STORE_PATTERN.search("Store_12345 connected")
         assert match is not None
         assert match.group(1) == "12345"
 
     def test_store_id_with_vnvr_suffix(self):
         """Test 'Store 51389 (vNVR)' format."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
+
         match = STORE_PATTERN.search("Store 51389 (vNVR) connected")
         assert match is not None
         assert match.group(1) == "51389"
 
     def test_store_id_4_digits(self):
         """Test 4-digit store IDs are captured."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
+
         match = STORE_PATTERN.search("Store 0123 connected")
         assert match is not None
         assert match.group(1) == "0123"
 
     def test_no_store_id_returns_none(self):
         """Test that lines without store ID return None."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
+
         assert STORE_PATTERN.search("No store here") is None
         assert STORE_PATTERN.search("Store ABC invalid") is None
 
@@ -94,14 +97,16 @@ class TestFederationGroupExtraction:
 
     def test_fed_group_extraction(self):
         """Test extraction of SBUXSCRoleGroup pattern."""
-        from analyze_federation_ai import FED_GROUP_PATTERN
+        from federation_analyzer.patterns import FED_GROUP_PATTERN
+
         match = FED_GROUP_PATTERN.search("SBUXSCRoleGroup42 (Info) message")
         assert match is not None
         assert match.group(1) == "SBUXSCRoleGroup42"
 
     def test_fed_group_various_numbers(self):
         """Test federation groups with various numbers."""
-        from analyze_federation_ai import FED_GROUP_PATTERN
+        from federation_analyzer.patterns import FED_GROUP_PATTERN
+
         test_cases = ["SBUXSCRoleGroup1", "SBUXSCRoleGroup99", "SBUXSCRoleGroup123"]
         for group in test_cases:
             match = FED_GROUP_PATTERN.search(group)
@@ -110,7 +115,8 @@ class TestFederationGroupExtraction:
 
     def test_no_fed_group_returns_none(self):
         """Test that lines without federation group return None."""
-        from analyze_federation_ai import FED_GROUP_PATTERN
+        from federation_analyzer.patterns import FED_GROUP_PATTERN
+
         assert FED_GROUP_PATTERN.search("Federation (Info) message") is None
 
 
@@ -156,7 +162,7 @@ class TestPatternConstants:
 
     def test_timestamp_pattern(self):
         """Test TIMESTAMP_PATTERN regex."""
-        from analyze_federation_ai import TIMESTAMP_PATTERN
+        from federation_analyzer.patterns import TIMESTAMP_PATTERN
 
         valid = "2024-01-04T21:06:38.339-08:00 rest of line"
         match = TIMESTAMP_PATTERN.match(valid)
@@ -165,7 +171,7 @@ class TestPatternConstants:
 
     def test_store_pattern(self):
         """Test STORE_PATTERN regex."""
-        from analyze_federation_ai import STORE_PATTERN
+        from federation_analyzer.patterns import STORE_PATTERN
 
         test_cases = [
             ("Store 51389", "51389"),
@@ -180,7 +186,7 @@ class TestPatternConstants:
 
     def test_ip_port_pattern(self):
         """Test IP_PORT_PATTERN regex."""
-        from analyze_federation_ai import IP_PORT_PATTERN
+        from federation_analyzer.patterns import IP_PORT_PATTERN
 
         text = "Connected to 192.168.1.100:5500"
         match = IP_PORT_PATTERN.search(text)
@@ -190,7 +196,7 @@ class TestPatternConstants:
 
     def test_fed_group_pattern(self):
         """Test FED_GROUP_PATTERN regex."""
-        from analyze_federation_ai import FED_GROUP_PATTERN
+        from federation_analyzer.patterns import FED_GROUP_PATTERN
 
         test_cases = [
             "SBUXSCRoleGroup1",
