@@ -12,21 +12,29 @@ The tools analyze logs from federated Security Center deployments (specifically 
 
 ### Analyzers - Which Version to Use
 
-**Recommended: analyze_federation_ai.py** (Primary)
-- Full-featured AI-powered analysis with anomaly detection, clustering, forecasting
-- Best for: Daily analysis, investigations, comprehensive reports
-- Run: `python analyze_federation_ai.py [path]`
+**Recommended: analyze_smart.py** (Auto-Select)
+- Automatically chooses the best analyzer based on dataset size, file count, and available memory
+- Analyzes dataset profile before running
+- Run: `python analyze_smart.py [path]`
+- Options: `--dry-run` (analyze only), `--force-ai`, `--force-v2`, `--force-v3`
 
-**For Very Large Datasets: analyze_federation_logs_v3.py**
-- Memory-efficient streaming with Welford's algorithm
-- Best for: 10M+ lines, constrained memory environments
-- Run: `python analyze_federation_logs_v3.py [path]`
+**Selection Logic:**
+| Dataset Size | Files | Analyzer Selected |
+|--------------|-------|-------------------|
+| <1GB | <500 | AI analyzer (full ML) |
+| 1-10GB | 500-2000 | AI or v2 (based on memory) |
+| >10GB | >2000 | v3 (streaming) |
+| Any | Memory constrained | v3 (streaming) |
 
-**Other Analyzers:**
-- **health_events_analyzer.py** - Analyzes Excel health event exports
-- **analyze_store_reasons.py** - Focused disconnect reason analysis per store
+**Individual Analyzers:**
+- **analyze_federation_ai.py** - Full AI/ML analysis (Isolation Forest, LOF, clustering, forecasting). Best for small-medium datasets with sufficient RAM.
+- **analyze_federation_logs_v3.py** - Memory-efficient streaming with Welford's algorithm. Best for 10GB+, 10M+ lines.
 - **analyze_federation_logs_v2.py** - Optimized v2, faster than v1 (20-30% speed improvement)
 - **analyze_federation_logs.py** - Original v1 (legacy, superseded by v2)
+
+**Other Tools:**
+- **health_events_analyzer.py** - Analyzes Excel health event exports
+- **analyze_store_reasons.py** - Focused disconnect reason analysis per store
 
 ### MCP Server
 - **federation_mcp_server.py** - Model Context Protocol server exposing analysis tools. Configure in Claude Desktop using the pattern in `claude_desktop_config.example.json`
@@ -44,10 +52,18 @@ The tools analyze logs from federated Security Center deployments (specifically 
 # Install dependencies
 pip install -r requirements.txt
 
-# Federation log analysis (auto-discovers in ~/Downloads if no path given)
-python analyze_federation_ai.py
-python analyze_federation_ai.py /path/to/logs.zip
-python analyze_federation_ai.py /path/to/directory/
+# Smart analyzer (recommended) - auto-selects best analyzer
+python analyze_smart.py /path/to/logs/
+python analyze_smart.py /path/to/logs.zip
+python analyze_smart.py /path/to/logs/ --dry-run  # Preview selection only
+
+# Force specific analyzer if needed
+python analyze_smart.py /path/to/logs/ --force-ai   # Force AI/ML analyzer
+python analyze_smart.py /path/to/logs/ --force-v3   # Force streaming analyzer
+
+# Direct analyzer usage (if you know which one to use)
+python analyze_federation_ai.py /path/to/logs/      # Small-medium datasets
+python analyze_federation_logs_v3.py /path/to/logs/ # Large datasets (10GB+)
 
 # Health events analysis
 python health_events_analyzer.py
