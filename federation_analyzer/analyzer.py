@@ -1,16 +1,18 @@
 """
 Main FederationLogAnalyzer class for parsing and analyzing federation logs.
+Now with TRUE multiprocessing for parallel CPU utilization.
 """
 
 import io
+import multiprocessing
 import os
 import re
 import warnings
 import zipfile
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -47,6 +49,231 @@ from .patterns import (
 
 # Module logger
 logger = get_logger(__name__)
+
+
+def _process_log_file_worker(  # noqa: C901
+    args: Tuple[str, Optional[str]],
+) -> Dict[str, Any]:
+    """
+    Worker function to process a single log file.
+    Must be at module level for multiprocessing pickle.
+
+    Args:
+        args: Tuple of (filepath, fed_group)
+
+    Returns:
+        Dictionary with extracted data for merging into main analyzer.
+    """
+    filepath, initial_fed_group = args
+
+    # Note: Using Dict[str, Any] for result to allow mixed types.
+    # mypy struggles with heterogeneous dict types - runtime behavior is correct.
+    result: Dict[str, Any] = {
+        "success": True,
+        "filepath": filepath,
+        "events": [],
+        "store_stats": {},  # store_id -> stats dict
+        "machine_stats": {},  # machine -> stats dict
+        "hourly_errors": {},  # hour_key -> {category: count}
+        "error_category_totals": {},
+        "ip_stats": {},  # ip -> {stores: set, errors: int}
+        "internal_error_totals": {},
+        "lines_processed": 0,
+        "files_processed": 1,
+        "min_ts": None,
+        "max_ts": None,
+        "seen_hashes": set(),
+    }
+
+    current_fed_group = initial_fed_group
+    current_machine = None
+
+    try:
+        with open(filepath, encoding="utf-8-sig", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Check for header/fed group info
+                if line.startswith("*"):
+                    match = FED_GROUP_PATTERN.search(line)
+                    if match:
+                        current_fed_group = match.group(1)
+                    if "MachineName=" in line:
+                        m = re.search(r"MachineName=(\S+)", line)
+                        if m:
+                            current_machine = m.group(1)
+                    continue
+
+                # Skip duplicates
+                line_hash = hash(line)
+                if line_hash in result["seen_hashes"]:
+                    continue
+                result["seen_hashes"].add(line_hash)
+                result["lines_processed"] += 1
+
+                # Parse timestamp
+                if len(line) < 20 or line[4] != "-":
+                    continue
+                try:
+                    timestamp = datetime.strptime(line[:19], "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    continue
+
+                # Update time range
+                if result["min_ts"] is None or timestamp < result["min_ts"]:
+                    result["min_ts"] = timestamp
+                if result["max_ts"] is None or timestamp > result["max_ts"]:
+                    result["max_ts"] = timestamp
+
+                # Classify error
+                line_lower = line.lower()
+                error_category = None
+                for category, patterns in ERROR_PATTERNS.items():
+                    if any(p.lower() in line_lower for p in patterns):
+                        error_category = category
+                        break
+
+                severity = None
+                for sev, pattern in SEVERITY_PATTERNS.items():
+                    if pattern.search(line):
+                        severity = sev
+                        break
+
+                if not error_category and not severity:
+                    continue
+
+                # Extract store ID
+                store_match = STORE_PATTERN.search(line)
+                store_id = store_match.group(1).zfill(5) if store_match else None
+
+                # Extract IP/Port
+                ip_match = IP_PORT_PATTERN.search(line)
+                ip = ip_match.group(1) if ip_match else None
+                port = ip_match.group(2) if ip_match else None
+
+                # Extract fed group from line
+                fg_match = FED_GROUP_PATTERN.search(line)
+                if fg_match:
+                    current_fed_group = fg_match.group(1)
+
+                # Classify internal error subtype
+                internal_subtype = None
+                if error_category and error_category.startswith("internal_error"):
+                    for subtype, pattern in INTERNAL_ERROR_SUBTYPES.items():
+                        if pattern.search(line):
+                            internal_subtype = subtype
+                            break
+
+                # Build event dict (serializable)
+                event_dict = {
+                    "timestamp": timestamp.isoformat(),
+                    "store_id": store_id,
+                    "fed_group": current_fed_group,
+                    "machine": current_machine,
+                    "error_category": error_category,
+                    "severity": severity,
+                    "ip": ip,
+                    "port": port,
+                    "message": line[:300],
+                    "internal_error_subtype": internal_subtype,
+                }
+                result["events"].append(event_dict)
+
+                # Track internal error subtypes
+                if internal_subtype:
+                    result["internal_error_totals"][internal_subtype] = (
+                        result["internal_error_totals"].get(internal_subtype, 0) + 1
+                    )
+
+                # Calculate hour key
+                hour_key = timestamp.replace(minute=0, second=0, microsecond=0).isoformat()
+
+                # Update error category totals
+                if error_category:
+                    result["error_category_totals"][error_category] = (
+                        result["error_category_totals"].get(error_category, 0) + 1
+                    )
+                    if hour_key not in result["hourly_errors"]:
+                        result["hourly_errors"][hour_key] = {}
+                    result["hourly_errors"][hour_key][error_category] = (
+                        result["hourly_errors"][hour_key].get(error_category, 0) + 1
+                    )
+
+                # Update store stats
+                if store_id:
+                    if store_id not in result["store_stats"]:
+                        result["store_stats"][store_id] = {
+                            "total_errors": 0,
+                            "error_categories": {},
+                            "internal_error_subtypes": {},
+                            "timestamps": [],
+                            "ips": [],
+                            "fed_groups": [],
+                            "machines": [],
+                            "hourly_counts": {},
+                            "reconnect_delays": [],
+                        }
+                    stats = result["store_stats"][store_id]
+                    stats["total_errors"] += 1
+                    stats["timestamps"].append(timestamp.isoformat())
+                    if error_category:
+                        stats["error_categories"][error_category] = (
+                            stats["error_categories"].get(error_category, 0) + 1
+                        )
+                    if internal_subtype:
+                        stats["internal_error_subtypes"][internal_subtype] = (
+                            stats["internal_error_subtypes"].get(internal_subtype, 0) + 1
+                        )
+                    if ip and ip not in stats["ips"]:
+                        stats["ips"].append(ip)
+                    if current_fed_group and current_fed_group not in stats["fed_groups"]:
+                        stats["fed_groups"].append(current_fed_group)
+                    if current_machine and current_machine not in stats["machines"]:
+                        stats["machines"].append(current_machine)
+                    stats["hourly_counts"][hour_key] = stats["hourly_counts"].get(hour_key, 0) + 1
+
+                    # Extract reconnect delay
+                    delay_match = re.search(r"startDelay\s*=\s*(\d+)", line)
+                    if delay_match:
+                        stats["reconnect_delays"].append(int(delay_match.group(1)))
+
+                # Update machine stats
+                if current_machine:
+                    if current_machine not in result["machine_stats"]:
+                        result["machine_stats"][current_machine] = {
+                            "total_errors": 0,
+                            "stores": [],
+                            "error_categories": {},
+                        }
+                    mstats = result["machine_stats"][current_machine]
+                    mstats["total_errors"] += 1
+                    if store_id and store_id not in mstats["stores"]:
+                        mstats["stores"].append(store_id)
+                    if error_category:
+                        mstats["error_categories"][error_category] = (
+                            mstats["error_categories"].get(error_category, 0) + 1
+                        )
+
+                # Update IP stats
+                if ip:
+                    if ip not in result["ip_stats"]:
+                        result["ip_stats"][ip] = {"stores": [], "errors": 0}
+                    result["ip_stats"][ip]["errors"] += 1
+                    if store_id and store_id not in result["ip_stats"][ip]["stores"]:
+                        result["ip_stats"][ip]["stores"].append(store_id)
+
+        # Clear seen_hashes to reduce memory
+        result["seen_hashes"] = set()
+
+    except Exception as e:
+        result["success"] = False
+        result["error"] = str(e)
+
+    return result
+
+
 from .ml.anomaly import AdvancedAnomalyDetector
 from .ml.cascades import CascadeDetector
 from .ml.causality import CausalAnalyzer
@@ -326,9 +553,94 @@ class FederationLogAnalyzer:
         except Exception as e:
             logger.error("  Error processing file: %s", e)
 
-    def process_log_directory(self, dir_path: str):
-        """Process all .log files in a directory."""
+    def _merge_worker_result(self, result: Dict):
+        """Merge results from a worker process into the main analyzer."""
+        if not result.get("success", False):
+            return
+
+        # Merge events
+        for event_dict in result.get("events", []):
+            event = FederationEvent()
+            event.timestamp = datetime.fromisoformat(event_dict["timestamp"])
+            event.store_id = event_dict["store_id"]
+            event.fed_group = event_dict["fed_group"]
+            event.machine = event_dict["machine"]
+            event.error_category = event_dict["error_category"]
+            event.severity = event_dict["severity"]
+            event.ip = event_dict["ip"]
+            event.port = event_dict["port"]
+            event.message = event_dict["message"]
+            event.internal_error_subtype = event_dict["internal_error_subtype"]
+            self.events.append(event)
+
+        # Merge store stats
+        for store_id, store_data in result.get("store_stats", {}).items():
+            s = self.store_stats[store_id]
+            s["total_errors"] += store_data["total_errors"]
+            for cat, count in store_data["error_categories"].items():
+                s["error_categories"][cat] += count
+            for subtype, count in store_data["internal_error_subtypes"].items():
+                s["internal_error_subtypes"][subtype] += count
+            for ts_str in store_data["timestamps"]:
+                s["timestamps"].append(datetime.fromisoformat(ts_str))
+            for ip in store_data["ips"]:
+                s["ips"].add(ip)
+            for fg in store_data["fed_groups"]:
+                s["fed_groups"].add(fg)
+            for machine in store_data["machines"]:
+                s["machines"].add(machine)
+            for hour_key, count in store_data["hourly_counts"].items():
+                hour = datetime.fromisoformat(hour_key)
+                s["hourly_counts"][hour] += count
+            s["reconnect_delays"].extend(store_data["reconnect_delays"])
+
+        # Merge machine stats
+        for machine, mstats in result.get("machine_stats", {}).items():
+            m = self.machine_stats[machine]
+            m["total_errors"] += mstats["total_errors"]
+            for store_id in mstats["stores"]:
+                m["stores"].add(store_id)
+            for cat, count in mstats["error_categories"].items():
+                m["error_categories"][cat] += count
+
+        # Merge hourly errors
+        for hour_key, categories in result.get("hourly_errors", {}).items():
+            hour = datetime.fromisoformat(hour_key)
+            for cat, count in categories.items():
+                self.hourly_errors[hour][cat] += count
+
+        # Merge error category totals
+        for cat, count in result.get("error_category_totals", {}).items():
+            self.error_category_totals[cat] += count
+
+        # Merge IP stats
+        for ip, ip_data in result.get("ip_stats", {}).items():
+            self.ip_stats[ip]["errors"] += ip_data["errors"]
+            for store_id in ip_data["stores"]:
+                self.ip_stats[ip]["stores"].add(store_id)
+
+        # Merge internal error totals
+        for subtype, count in result.get("internal_error_totals", {}).items():
+            self.internal_error_totals[subtype] += count
+
+        # Merge time range
+        if result.get("min_ts"):
+            if self.min_ts is None or result["min_ts"] < self.min_ts:
+                self.min_ts = result["min_ts"]
+        if result.get("max_ts"):
+            if self.max_ts is None or result["max_ts"] > self.max_ts:
+                self.max_ts = result["max_ts"]
+
+        self.lines_processed += result.get("lines_processed", 0)
+        self.files_processed += result.get("files_processed", 0)
+
+    def process_log_directory(self, dir_path: str, max_workers: int = None):
+        """Process all .log files in a directory using multiprocessing."""
+        if max_workers is None:
+            max_workers = multiprocessing.cpu_count()
+
         logger.info("\nProcessing directory: %s", dir_path)
+        logger.info("  Using %d CPU cores for parallel processing", max_workers)
 
         log_files = []
         for root, _dirs, files in os.walk(dir_path):
@@ -345,17 +657,51 @@ class FederationLogAnalyzer:
 
         logger.info("  Found %d log files", len(log_files))
 
-        for log_file in sorted(log_files):
-            try:
-                with open(log_file, encoding="utf-8-sig", errors="replace") as f:
-                    content = f.read()
-                    self.process_log_content(content)
-                    self.files_processed += 1
-            except Exception as e:
-                logger.error("    Error processing %s: %s", os.path.basename(log_file), e)
+        if not log_files:
+            return
+
+        # Prepare work items: (filepath, fed_group)
+        work_items = [(f, None) for f in sorted(log_files)]
+
+        # Process with multiprocessing
+        processed = 0
+        errors = 0
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_process_log_file_worker, item): item for item in work_items}
+
+            for future in as_completed(futures):
+                processed += 1
+                try:
+                    result = future.result()
+                    if result["success"]:
+                        self._merge_worker_result(result)
+                    else:
+                        errors += 1
+                        if errors <= 5:
+                            logger.error(
+                                "    Error: %s: %s",
+                                os.path.basename(result["filepath"]),
+                                result.get("error", "Unknown error"),
+                            )
+                except Exception as e:
+                    errors += 1
+                    if errors <= 5:
+                        logger.error("    Worker error: %s", e)
+
+                if processed % 200 == 0:
+                    logger.info(
+                        "    %d/%d files... (%s lines)",
+                        processed,
+                        len(log_files),
+                        f"{self.lines_processed:,}",
+                    )
 
         logger.info(
-            "  Processed %d files, %s lines", self.files_processed, f"{self.lines_processed:,}"
+            "  Processed %d files, %s lines (%d errors)",
+            self.files_processed,
+            f"{self.lines_processed:,}",
+            errors,
         )
 
     def analyze_anomalies(self) -> Dict:

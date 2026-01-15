@@ -2,6 +2,7 @@
 """
 AI-Powered Federation Log Analyzer for Genetec Security Center
 Enhanced with Advanced ML Algorithms for Pattern Detection and Prediction.
+Now with TRUE multiprocessing for parallel CPU utilization.
 
 This is the main entry point script. The implementation has been modularized
 into the federation_analyzer package for better organization and maintainability.
@@ -12,6 +13,7 @@ Features:
 - Root Cause Inference: Feature importance, causal analysis, Bayesian inference
 - Cascade Failure Detection: Temporal correlation, propagation analysis
 - Actionable Recommendations: Priority-scored remediation steps
+- TRUE Multiprocessing: Uses all CPU cores for parallel file processing
 
 Supports:
 - Nested ZIP files containing .log files
@@ -19,35 +21,22 @@ Supports:
 - Connection timeout, TLS errors, socket exceptions detection
 """
 
+import multiprocessing
 import os
 import sys
 
 # Import from the modular package
-from federation_analyzer import FederationLogAnalyzer
-
 # Re-export patterns for backward compatibility
 from federation_analyzer import (
-    TIMESTAMP_PATTERN,
-    STORE_PATTERN,
-    IP_PORT_PATTERN,
-    FED_GROUP_PATTERN,
-    ERROR_PATTERNS,
-    INTERNAL_ERROR_SUBTYPES,
-    SEVERITY_PATTERNS,
-    FederationEvent,
-    OnlineStats,
-    AdvancedAnomalyDetector,
-    PredictiveAnalytics,
-    CausalAnalyzer,
-    CascadeDetector,
-    Recommendation,
-    RecommendationEngine,
+    FederationLogAnalyzer,
 )
 
 
-def main():
+def main():  # noqa: C901
     """Main entry point."""
     print("Federation Log AI Analyzer")
+    print("Advanced ML Analysis with MULTIPROCESSING")
+    print(f"CPU cores available: {multiprocessing.cpu_count()}")
     print("=" * 50)
 
     analyzer = FederationLogAnalyzer()
@@ -57,9 +46,9 @@ def main():
         for arg in sys.argv[1:]:
             path = os.path.expanduser(arg)
             if os.path.isfile(path):
-                if path.endswith('.zip'):
+                if path.endswith(".zip"):
                     analyzer.process_nested_zip(path)
-                elif path.endswith('.log'):
+                elif path.endswith(".log"):
                     analyzer.process_log_file(path)
                 else:
                     print(f"Unsupported file type: {path}")
@@ -75,9 +64,9 @@ def main():
 
         for f in os.listdir(downloads):
             full_path = os.path.join(downloads, f)
-            if f.endswith('.zip') and ('Fed' in f or 'Base' in f):
+            if f.endswith(".zip") and ("Fed" in f or "Base" in f):
                 zip_files.append(full_path)
-            elif f.endswith('.log') and ('SBUXSCRoleGroup' in f or 'Federation' in f):
+            elif f.endswith(".log") and ("SBUXSCRoleGroup" in f or "Federation" in f):
                 log_files.append(full_path)
 
         if not zip_files and not log_files:

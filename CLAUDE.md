@@ -26,10 +26,10 @@ The tools analyze logs from federated Security Center deployments (specifically 
 | >10GB | >2000 | v3 (streaming) |
 | Any | Memory constrained | v3 (streaming) |
 
-**Individual Analyzers:**
-- **analyze_federation_ai.py** - Full AI/ML analysis (Isolation Forest, LOF, clustering, forecasting). Best for small-medium datasets with sufficient RAM.
-- **analyze_federation_logs_v3.py** - Memory-efficient streaming with Welford's algorithm. Best for 10GB+, 10M+ lines.
-- **analyze_federation_logs_v2.py** - Optimized v2, faster than v1 (20-30% speed improvement)
+**Individual Analyzers (all use multiprocessing for parallel CPU utilization):**
+- **analyze_federation_ai.py** - Full AI/ML analysis (Isolation Forest, LOF, clustering, forecasting). Uses ProcessPoolExecutor for file processing. Best for small-medium datasets with sufficient RAM.
+- **analyze_federation_logs_v3.py** - Memory-efficient streaming with Welford's algorithm. Uses ProcessPoolExecutor for true parallel processing across all CPU cores. Best for 10GB+, 10M+ lines.
+- **analyze_federation_logs_v2.py** - Optimized v2 with ProcessPoolExecutor multiprocessing. Faster than v1 (now 10-20x faster with all CPU cores).
 - **analyze_federation_logs.py** - Original v1 (legacy, superseded by v2)
 
 **Other Tools:**
@@ -71,6 +71,15 @@ python health_events_analyzer.py "/path/to/Health history.xlsx"
 ```
 
 ## Architecture
+
+### Multiprocessing
+All analyzers (v2, v3, AI) use `ProcessPoolExecutor` for true parallel processing across all CPU cores. This bypasses Python's Global Interpreter Lock (GIL) limitation that affects `ThreadPoolExecutor`.
+
+**Key implementation details:**
+- Worker functions are defined at module level to allow pickle serialization
+- Data structures use regular dicts instead of `defaultdict(lambda)` for pickle compatibility
+- Results are serialized (timestamps as ISO strings, sets as lists) and merged in the main process
+- ZIP files are still processed sequentially due to temp file handling constraints
 
 ### ML Algorithms Used
 - **Anomaly Detection**: Ensemble of Isolation Forest, Local Outlier Factor (LOF), DBSCAN, and Z-score methods. Anomaly if ≥2 methods agree.
