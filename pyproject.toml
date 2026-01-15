@@ -75,6 +75,8 @@ ignore = [
 # Ignore unused imports in files that check for optional dependencies
 # Ignore complexity for process_line (would need refactoring)
 "federation_analyzer/analyzer.py" = ["F401", "C901"]
+# Ignore complexity for v3 analyzer (streaming/worker functions are inherently complex)
+"analyze_federation_logs_v3.py" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["federation_analyzer"]
