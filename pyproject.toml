@@ -137,7 +137,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -n auto"  # -n auto uses all CPU cores for parallel tests
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",

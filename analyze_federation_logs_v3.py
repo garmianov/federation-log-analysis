@@ -205,6 +205,106 @@ def process_file_worker(filepath):
         return {"success": False, "filepath": filepath, "error": str(e)}
 
 
+def process_zip_worker(zip_path):
+    """
+    Worker function to process a single ZIP file.
+    Must be at module level for multiprocessing pickle.
+    Creates its own temp directory for extraction.
+    Returns aggregated results from all logs in the zip.
+    """
+    aggregated = {
+        "store_disconnects": defaultdict(int),
+        "store_fed_groups": {},
+        "store_durations": defaultdict(list),
+        "timeline": {},
+        "error_counts": defaultdict(int),
+        "error_samples": [],
+        "lines_processed": 0,
+        "min_ts": None,
+        "max_ts": None,
+        "files_in_zip": 0,
+    }
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                log_names = [n for n in zf.namelist() if n.endswith(".log")]
+
+                for name in log_names:
+                    extracted = os.path.join(temp_dir, os.path.basename(name))
+                    try:
+                        with zf.open(name) as src, open(extracted, "wb") as dst:
+                            dst.write(src.read())
+
+                        result = process_file_worker(extracted)
+
+                        if result["success"]:
+                            data = result["data"]
+                            aggregated["files_in_zip"] += 1
+
+                            # Merge store disconnects
+                            for store_id, count in data["store_disconnects"].items():
+                                aggregated["store_disconnects"][store_id] += count
+
+                            # Merge fed groups
+                            aggregated["store_fed_groups"].update(data["store_fed_groups"])
+
+                            # Merge durations
+                            for store_id, durations in data["store_durations"].items():
+                                aggregated["store_durations"][store_id].extend(durations)
+
+                            # Merge timeline
+                            for hour_key, tdata in data["timeline"].items():
+                                if hour_key not in aggregated["timeline"]:
+                                    aggregated["timeline"][hour_key] = {
+                                        "disconnects": 0,
+                                        "reconnects": 0,
+                                        "stores": [],
+                                    }
+                                aggregated["timeline"][hour_key]["disconnects"] += tdata[
+                                    "disconnects"
+                                ]
+                                aggregated["timeline"][hour_key]["reconnects"] += tdata[
+                                    "reconnects"
+                                ]
+                                aggregated["timeline"][hour_key]["stores"].extend(tdata["stores"])
+
+                            # Merge errors
+                            for err_type, count in data["error_counts"].items():
+                                aggregated["error_counts"][err_type] += count
+
+                            if len(aggregated["error_samples"]) < 20:
+                                aggregated["error_samples"].extend(
+                                    data["error_samples"][: 20 - len(aggregated["error_samples"])]
+                                )
+
+                            # Merge time range
+                            if data["min_ts"]:
+                                if (
+                                    aggregated["min_ts"] is None
+                                    or data["min_ts"] < aggregated["min_ts"]
+                                ):
+                                    aggregated["min_ts"] = data["min_ts"]
+                            if data["max_ts"]:
+                                if (
+                                    aggregated["max_ts"] is None
+                                    or data["max_ts"] > aggregated["max_ts"]
+                                ):
+                                    aggregated["max_ts"] = data["max_ts"]
+
+                            aggregated["lines_processed"] += data["lines_processed"]
+
+                        os.remove(extracted)
+                    except Exception:
+                        # Skip individual file errors within zip
+                        pass
+
+        return {"success": True, "filepath": zip_path, "data": aggregated}
+
+    except Exception as e:
+        return {"success": False, "filepath": zip_path, "error": str(e)}
+
+
 class OnlineStats:
     """Welford's online algorithm for mean, variance, min, max."""
 
@@ -259,7 +359,9 @@ class OnlineStats:
 
 
 class StreamAnalyzer:
-    def __init__(self):
+    def __init__(self, server_id: str = "Unknown"):
+        self.server_id = server_id
+
         # Per-store aggregated stats
         self.store_disconnect_count = defaultdict(int)
         self.store_fed_groups = {}
@@ -321,23 +423,6 @@ class StreamAnalyzer:
 
         self.lines_processed += data["lines_processed"]
 
-    def process_zip(self, zip_path, temp_dir):
-        """Process a ZIP file (extracts and processes logs)."""
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                for name in zf.namelist():
-                    if name.endswith(".log"):
-                        extracted = os.path.join(temp_dir, os.path.basename(name))
-                        with zf.open(name) as src, open(extracted, "wb") as dst:
-                            dst.write(src.read())
-                        result = process_file_worker(extracted)
-                        if result["success"]:
-                            self.merge_result(result["data"])
-                            self.files_processed += 1
-                        os.remove(extracted)
-        except Exception as e:
-            print(f"  Error zip: {os.path.basename(zip_path)}: {e}", file=sys.stderr, flush=True)
-
     def scan_all(self, log_dirs, max_workers=None):
         """Scan all log directories with TRUE parallel multiprocessing."""
         if max_workers is None:
@@ -347,64 +432,96 @@ class StreamAnalyzer:
         print(f"SCANNING LOG DIRECTORIES (Multiprocessing: {max_workers} workers)", flush=True)
         print("=" * 80, flush=True)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            for log_dir in log_dirs:
-                if not os.path.exists(log_dir):
-                    print(f"Warning: {log_dir} not found", flush=True)
-                    continue
+        for log_dir in log_dirs:
+            if not os.path.exists(log_dir):
+                print(f"Warning: {log_dir} not found", flush=True)
+                continue
 
-                print(f"\nScanning: {os.path.basename(log_dir)}", flush=True)
-                files = sorted(os.listdir(log_dir))
-                log_files = [os.path.join(log_dir, f) for f in files if f.endswith(".log")]
-                zip_files = [os.path.join(log_dir, f) for f in files if f.endswith(".zip")]
+            print(f"\nScanning: {os.path.basename(log_dir)}", flush=True)
+            files = sorted(os.listdir(log_dir))
+            log_files = [os.path.join(log_dir, f) for f in files if f.endswith(".log")]
+            zip_files = [os.path.join(log_dir, f) for f in files if f.endswith(".zip")]
 
-                print(f"  {len(log_files)} .log, {len(zip_files)} .zip files", flush=True)
-                print(f"  Using {max_workers} CPU cores for parallel processing", flush=True)
+            print(f"  {len(log_files)} .log, {len(zip_files)} .zip files", flush=True)
+            print(f"  Using {max_workers} CPU cores for parallel processing", flush=True)
 
-                # Process log files in TRUE parallel with multiprocessing
-                processed = 0
-                errors = 0
+            # Process log files in TRUE parallel with multiprocessing
+            processed = 0
+            errors = 0
+
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all files
+                futures = {executor.submit(process_file_worker, fp): fp for fp in log_files}
+
+                for future in as_completed(futures):
+                    processed += 1
+                    try:
+                        result = future.result()
+                        if result["success"]:
+                            self.merge_result(result["data"])
+                            self.files_processed += 1
+                        else:
+                            errors += 1
+                            if errors <= 5:
+                                print(
+                                    f"    Error: {os.path.basename(result['filepath'])}: {result['error']}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                    except Exception as e:
+                        errors += 1
+                        if errors <= 5:
+                            print(f"    Worker error: {e}", file=sys.stderr, flush=True)
+
+                    if processed % 200 == 0:
+                        print(
+                            f"    {processed}/{len(log_files)} logs... ({self.lines_processed:,} lines)",
+                            flush=True,
+                        )
+
+            print(f"    Done: {len(log_files)} logs ({errors} errors)", flush=True)
+
+            # Process zip files in PARALLEL (each worker has its own temp dir)
+            if zip_files:
+                print(f"  Processing {len(zip_files)} zip files in parallel...", flush=True)
+                zip_processed = 0
+                zip_errors = 0
+                files_from_zips = 0
 
                 with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all files
-                    futures = {executor.submit(process_file_worker, fp): fp for fp in log_files}
+                    futures = {executor.submit(process_zip_worker, zp): zp for zp in zip_files}
 
                     for future in as_completed(futures):
-                        processed += 1
+                        zip_processed += 1
                         try:
                             result = future.result()
                             if result["success"]:
                                 self.merge_result(result["data"])
-                                self.files_processed += 1
+                                files_from_zips += result["data"].get("files_in_zip", 0)
                             else:
-                                errors += 1
-                                if errors <= 5:
+                                zip_errors += 1
+                                if zip_errors <= 3:
                                     print(
-                                        f"    Error: {os.path.basename(result['filepath'])}: {result['error']}",
+                                        f"    Zip error: {os.path.basename(result['filepath'])}: {result['error']}",
                                         file=sys.stderr,
                                         flush=True,
                                     )
                         except Exception as e:
-                            errors += 1
-                            if errors <= 5:
-                                print(f"    Worker error: {e}", file=sys.stderr, flush=True)
+                            zip_errors += 1
+                            if zip_errors <= 3:
+                                print(f"    Zip worker error: {e}", file=sys.stderr, flush=True)
 
-                        if processed % 200 == 0:
+                        if zip_processed % 50 == 0:
                             print(
-                                f"    {processed}/{len(log_files)} logs... ({self.lines_processed:,} lines)",
+                                f"    {zip_processed}/{len(zip_files)} zips... ({files_from_zips} logs extracted)",
                                 flush=True,
                             )
 
-                print(f"    Done: {len(log_files)} logs ({errors} errors)", flush=True)
-
-                # Process zip files (sequential due to temp file handling)
-                if zip_files:
-                    print(f"  Processing {len(zip_files)} zip files...", flush=True)
-                    for i, filepath in enumerate(zip_files):
-                        self.process_zip(filepath, temp_dir)
-                        if (i + 1) % 50 == 0:
-                            print(f"    {i+1}/{len(zip_files)} zips...", flush=True)
-                    print(f"    Done: {len(zip_files)} zips", flush=True)
+                self.files_processed += files_from_zips
+                print(
+                    f"    Done: {len(zip_files)} zips ({files_from_zips} logs, {zip_errors} errors)",
+                    flush=True,
+                )
 
         print(
             f"\nFiles: {self.files_processed}, Unique lines: {self.lines_processed:,}", flush=True
@@ -642,6 +759,175 @@ class StreamAnalyzer:
         print("=" * 80, flush=True)
 
 
+class MultiServerAnalyzer:
+    """Manages multiple StreamAnalyzers, one per server."""
+
+    def __init__(self):
+        self.server_analyzers: dict[str, StreamAnalyzer] = {}
+        self.server_pattern = re.compile(r"(MS\d+)")
+
+    def detect_servers(self, path: str) -> dict[str, list[str]]:
+        """
+        Detect server subdirectories in a path.
+        Returns dict of server_id -> list of log directories.
+        """
+        servers = {}
+        path = os.path.expanduser(path)
+
+        if not os.path.exists(path):
+            return servers
+
+        # Check if path itself is a server directory
+        match = self.server_pattern.search(os.path.basename(path))
+        if match:
+            server_id = match.group(1)
+            servers[server_id] = [path]
+            return servers
+
+        # Check for server subdirectories
+        for item in os.listdir(path):
+            full_path = os.path.join(path, item)
+            if os.path.isdir(full_path):
+                match = self.server_pattern.search(item)
+                if match:
+                    server_id = match.group(1)
+                    servers[server_id] = [full_path]
+                else:
+                    # Check if it contains logs (treat as single server "Unknown")
+                    try:
+                        has_logs = any(f.endswith(".log") for f in os.listdir(full_path))
+                        if has_logs:
+                            if "Unknown" not in servers:
+                                servers["Unknown"] = []
+                            servers["Unknown"].append(full_path)
+                    except (PermissionError, OSError):
+                        pass
+
+        # If no server dirs found, treat the whole path as one server
+        if not servers:
+            try:
+                has_logs = any(f.endswith(".log") for f in os.listdir(path))
+                has_zips = any(f.endswith(".zip") for f in os.listdir(path))
+                if has_logs or has_zips:
+                    servers["Unknown"] = [path]
+            except (PermissionError, OSError):
+                pass
+
+        return servers
+
+    def analyze(self, paths: list[str]):
+        """Analyze all paths, separating by server."""
+        # Detect servers across all paths
+        all_servers: dict[str, list[str]] = {}
+
+        for path in paths:
+            servers = self.detect_servers(path)
+            for server_id, dirs in servers.items():
+                if server_id not in all_servers:
+                    all_servers[server_id] = []
+                all_servers[server_id].extend(dirs)
+
+        if not all_servers:
+            print("No log files found!", flush=True)
+            return
+
+        print(f"Detected {len(all_servers)} server(s): {', '.join(sorted(all_servers.keys()))}")
+        print()
+
+        # Create and run analyzer for each server
+        for server_id in sorted(all_servers.keys()):
+            dirs = all_servers[server_id]
+            print(f"\n{'='*80}", flush=True)
+            print(f"SERVER: {server_id}", flush=True)
+            print(f"{'='*80}", flush=True)
+
+            analyzer = StreamAnalyzer(server_id)
+            analyzer.scan_all(dirs)
+            self.server_analyzers[server_id] = analyzer
+
+    def generate_reports(self):
+        """Generate reports for all servers."""
+        for server_id in sorted(self.server_analyzers.keys()):
+            analyzer = self.server_analyzers[server_id]
+            print(f"\n\n{'#'*80}", flush=True)
+            print(f"# REPORT FOR SERVER: {server_id}", flush=True)
+            print(f"{'#'*80}", flush=True)
+            analyzer.generate_report()
+
+        # Print combined summary if multiple servers
+        if len(self.server_analyzers) > 1:
+            self.print_combined_summary()
+
+    def print_combined_summary(self):
+        """Print a summary across all servers."""
+        print(f"\n\n{'='*80}", flush=True)
+        print("COMBINED MULTI-SERVER SUMMARY", flush=True)
+        print(f"{'='*80}", flush=True)
+
+        print(
+            f"\n{'Server':<15}{'Files':<12}{'Lines':<18}{'Stores':<10}{'Disconnects':<15}",
+            flush=True,
+        )
+        print("-" * 70, flush=True)
+
+        total_files = 0
+        total_lines = 0
+        total_stores = 0
+        total_dc = 0
+
+        for server_id in sorted(self.server_analyzers.keys()):
+            a = self.server_analyzers[server_id]
+            dc = sum(a.store_disconnect_count.values())
+            stores = len(a.store_disconnect_count)
+
+            print(
+                f"{server_id:<15}{a.files_processed:<12,}{a.lines_processed:<18,}{stores:<10}{dc:<15,}",
+                flush=True,
+            )
+
+            total_files += a.files_processed
+            total_lines += a.lines_processed
+            total_stores += stores
+            total_dc += dc
+
+        print("-" * 70, flush=True)
+        print(
+            f"{'TOTAL':<15}{total_files:<12,}{total_lines:<18,}{total_stores:<10}{total_dc:<15,}",
+            flush=True,
+        )
+
+        # Federation group comparison across servers
+        print(f"\n{'='*80}", flush=True)
+        print("FEDERATION GROUPS BY SERVER", flush=True)
+        print(f"{'='*80}", flush=True)
+
+        # Collect all fed groups
+        all_fed_groups = set()
+        for a in self.server_analyzers.values():
+            all_fed_groups.update(a.store_fed_groups.values())
+
+        if all_fed_groups:
+            # Header
+            servers = sorted(self.server_analyzers.keys())
+            header = f"{'Fed Group':<22}" + "".join(f"{s:<15}" for s in servers)
+            print(f"\n{header}", flush=True)
+            print("-" * (22 + 15 * len(servers)), flush=True)
+
+            for fg in sorted(all_fed_groups):
+                row = f"{fg:<22}"
+                for server_id in servers:
+                    a = self.server_analyzers[server_id]
+                    # Count stores in this fed group
+                    count = sum(1 for s, f in a.store_fed_groups.items() if f == fg)
+                    dc = sum(
+                        a.store_disconnect_count[s]
+                        for s, f in a.store_fed_groups.items()
+                        if f == fg
+                    )
+                    row += f"{count}s/{dc:,}dc".ljust(15)
+                print(row, flush=True)
+
+
 def find_log_paths():
     """Auto-discover federation log files/directories in ~/Downloads."""
     downloads = os.path.expanduser("~/Downloads")
@@ -673,6 +959,7 @@ def find_log_paths():
 def main():
     print("Security Center Federation Log Analyzer v3", flush=True)
     print("Memory-efficient streaming analysis with MULTIPROCESSING", flush=True)
+    print("Now with SERVER-AWARE analysis", flush=True)
     print(f"CPU cores available: {multiprocessing.cpu_count()}\n", flush=True)
 
     # Handle command-line arguments
@@ -698,9 +985,9 @@ def main():
             print(f"  ... and {len(log_dirs) - 5} more")
         print()
 
-    analyzer = StreamAnalyzer()
-    analyzer.scan_all(log_dirs)
-    analyzer.generate_report()
+    multi_analyzer = MultiServerAnalyzer()
+    multi_analyzer.analyze(log_dirs)
+    multi_analyzer.generate_reports()
 
 
 if __name__ == "__main__":
