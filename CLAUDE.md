@@ -60,11 +60,21 @@ Example sections to include:
 ## Running the Analyzers
 
 **File Management Workflow:**
-- When working with ZIP files, always unzip them to `/Volumes/MacMini/temps/claude/templogs` before analysis
+- When working with ZIP files, use `unzip_logs.py` to extract them to `/Volumes/MacMini/temps/claude/templogs`
+- The unzip script automatically:
+  - Extracts server ID from zip filename (e.g., `MS63870Fed.zip` → server `MS63870`)
+  - Creates a subfolder per server: `/templogs/MS63870/`, `/templogs/MS63871/`, etc.
+  - Recursively unzips nested zip files (zips inside zips) into the same server folder
+  - Handles any number of servers dynamically
 - Keep unzipped files in `/Volumes/MacMini/temps/claude/templogs` until a new session with new zip files is started
 - Before removing existing log files from `/Volumes/MacMini/temps/claude/templogs`, ask whether the new zip files should:
   - **Add to** existing files (keep old files and add new ones)
   - **Replace** existing files (remove old files before unzipping new ones)
+
+**Server-Aware Analysis:**
+- Federation groups (e.g., `SBUXSCRoleGroup6`) have the same names across different servers
+- Always separate analysis by server first, then by federation group within each server
+- Reports should show per-server breakdowns to avoid mixing data from different infrastructure
 
 ```bash
 # Install dependencies

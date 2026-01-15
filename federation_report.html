@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Federation Log Analysis Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            padding: 40px 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 1.1rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0,212,255,0.2);
+        }
+        .stat-value {
+            font-size: 2.2rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stat-label {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .section-title {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 24px;
+            background: linear-gradient(180deg, #00d4ff, #7b2cbf);
+            border-radius: 2px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+        }
+        .chart-container-small {
+            height: 300px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        th {
+            background: rgba(0,212,255,0.1);
+            color: #00d4ff;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+        }
+        tr:hover {
+            background: rgba(255,255,255,0.03);
+        }
+        .rank {
+            color: #888;
+            font-weight: 600;
+        }
+        .store-id {
+            font-family: 'Monaco', 'Consolas', monospace;
+            color: #00ff88;
+            font-weight: 600;
+        }
+        .disconnect-count {
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+        .fed-group {
+            color: #ffd93d;
+        }
+        .duration {
+            color: #ff9f43;
+        }
+        .bar-cell {
+            width: 200px;
+        }
+        .bar {
+            height: 20px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        .two-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        @media (max-width: 900px) {
+            .two-columns {
+                grid-template-columns: 1fr;
+            }
+        }
+        .alert-box {
+            background: linear-gradient(135deg, rgba(255,107,107,0.2), rgba(255,159,67,0.2));
+            border: 1px solid rgba(255,107,107,0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .alert-title {
+            color: #ff6b6b;
+            font-weight: 600;
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+        }
+        .alert-text {
+            color: #ddd;
+            line-height: 1.6;
+        }
+        .error-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin: 4px;
+        }
+        .error-conn {
+            background: rgba(255,107,107,0.2);
+            color: #ff6b6b;
+        }
+        .error-tls {
+            background: rgba(255,159,67,0.2);
+            color: #ff9f43;
+        }
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Federation Log Analysis Report</h1>
+            <p class="subtitle">Security Center Federation Health Analysis | Dec 27, 2025 - Jan 11, 2026</p>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">554.8M</div>
+                <div class="stat-label">Lines Processed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">9,974</div>
+                <div class="stat-label">Files Analyzed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">1,962</div>
+                <div class="stat-label">Stores Monitored</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">12.4M</div>
+                <div class="stat-label">Disconnect Events</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">8.1h</div>
+                <div class="stat-label">Max Disconnection</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">1.2m</div>
+                <div class="stat-label">Avg Disconnection</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="alert-box">
+                <div class="alert-title">Critical Incident Detected</div>
+                <div class="alert-text">
+                    A major systemic event began on <strong>January 4-5, 2026</strong>, with disconnect events increasing from ~15K/day to over <strong>2.7 million/day</strong> by January 9.
+                    All 1,963 stores were affected during peak hours, indicating infrastructure-level issues rather than individual store problems.
+                    Peak activity occurred between <strong>Jan 8-11</strong> with sustained high disconnect rates across all federation groups.
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Daily Disconnect Trend</h2>
+            <div class="chart-container">
+                <canvas id="dailyTrendChart"></canvas>
+            </div>
+        </div>
+
+        <div class="two-columns">
+            <div class="section">
+                <h2 class="section-title">Disconnects by Federation Group</h2>
+                <div class="chart-container chart-container-small">
+                    <canvas id="fedGroupChart"></canvas>
+                </div>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Error Distribution</h2>
+                <div class="chart-container chart-container-small">
+                    <canvas id="errorChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Top 20 Problem Stores</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Store ID</th>
+                        <th>Disconnects</th>
+                        <th>Federation Group</th>
+                        <th>Relative Impact</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td class="rank">1</td><td class="store-id">57419</td><td class="disconnect-count">33,942</td><td class="fed-group">SBUXSCRoleGroup6</td><td class="bar-cell"><div class="bar" style="width: 100%"></div></td></tr>
+                    <tr><td class="rank">2</td><td class="store-id">55244</td><td class="disconnect-count">33,687</td><td class="fed-group">SBUXSCRoleGroup4</td><td class="bar-cell"><div class="bar" style="width: 99%"></div></td></tr>
+                    <tr><td class="rank">3</td><td class="store-id">58630</td><td class="disconnect-count">33,670</td><td class="fed-group">SBUXSCRoleGroup8</td><td class="bar-cell"><div class="bar" style="width: 99%"></div></td></tr>
+                    <tr><td class="rank">4</td><td class="store-id">51734</td><td class="disconnect-count">33,662</td><td class="fed-group">SBUXSCRoleGroup1</td><td class="bar-cell"><div class="bar" style="width: 99%"></div></td></tr>
+                    <tr><td class="rank">5</td><td class="store-id">29393</td><td class="disconnect-count">28,848</td><td class="fed-group">SBUXSCRoleGroup4</td><td class="bar-cell"><div class="bar" style="width: 85%"></div></td></tr>
+                    <tr><td class="rank">6</td><td class="store-id">57282</td><td class="disconnect-count">25,083</td><td class="fed-group">SBUXSCRoleGroup6</td><td class="bar-cell"><div class="bar" style="width: 74%"></div></td></tr>
+                    <tr><td class="rank">7</td><td class="store-id">56762</td><td class="disconnect-count">19,107</td><td class="fed-group">SBUXSCRoleGroup6</td><td class="bar-cell"><div class="bar" style="width: 56%"></div></td></tr>
+                    <tr><td class="rank">8</td><td class="store-id">58910</td><td class="disconnect-count">19,104</td><td class="fed-group">SBUXSCRoleGroup9</td><td class="bar-cell"><div class="bar" style="width: 56%"></div></td></tr>
+                    <tr><td class="rank">9</td><td class="store-id">26924</td><td class="disconnect-count">14,545</td><td class="fed-group">SBUXSCRoleGroup2</td><td class="bar-cell"><div class="bar" style="width: 43%"></div></td></tr>
+                    <tr><td class="rank">10</td><td class="store-id">53591</td><td class="disconnect-count">11,910</td><td class="fed-group">SBUXSCRoleGroup2</td><td class="bar-cell"><div class="bar" style="width: 35%"></div></td></tr>
+                    <tr><td class="rank">11</td><td class="store-id">56881</td><td class="disconnect-count">11,279</td><td class="fed-group">SBUXSCRoleGroup6</td><td class="bar-cell"><div class="bar" style="width: 33%"></div></td></tr>
+                    <tr><td class="rank">12</td><td class="store-id">25466</td><td class="disconnect-count">10,520</td><td class="fed-group">SBUXSCRoleGroup0</td><td class="bar-cell"><div class="bar" style="width: 31%"></div></td></tr>
+                    <tr><td class="rank">13</td><td class="store-id">48156</td><td class="disconnect-count">8,838</td><td class="fed-group">SBUXSCRoleGroup6</td><td class="bar-cell"><div class="bar" style="width: 26%"></div></td></tr>
+                    <tr><td class="rank">14</td><td class="store-id">56064</td><td class="disconnect-count">8,476</td><td class="fed-group">SBUXSCRoleGroup5</td><td class="bar-cell"><div class="bar" style="width: 25%"></div></td></tr>
+                    <tr><td class="rank">15</td><td class="store-id">57604</td><td class="disconnect-count">8,128</td><td class="fed-group">SBUXSCRoleGroup7</td><td class="bar-cell"><div class="bar" style="width: 24%"></div></td></tr>
+                    <tr><td class="rank">16</td><td class="store-id">52398</td><td class="disconnect-count">8,090</td><td class="fed-group">SBUXSCRoleGroup2</td><td class="bar-cell"><div class="bar" style="width: 24%"></div></td></tr>
+                    <tr><td class="rank">17</td><td class="store-id">54605</td><td class="disconnect-count">8,032</td><td class="fed-group">SBUXSCRoleGroup4</td><td class="bar-cell"><div class="bar" style="width: 24%"></div></td></tr>
+                    <tr><td class="rank">18</td><td class="store-id">53827</td><td class="disconnect-count">8,007</td><td class="fed-group">SBUXSCRoleGroup3</td><td class="bar-cell"><div class="bar" style="width: 24%"></div></td></tr>
+                    <tr><td class="rank">19</td><td class="store-id">51967</td><td class="disconnect-count">7,939</td><td class="fed-group">SBUXSCRoleGroup1</td><td class="bar-cell"><div class="bar" style="width: 23%"></div></td></tr>
+                    <tr><td class="rank">20</td><td class="store-id">53815</td><td class="disconnect-count">7,830</td><td class="fed-group">SBUXSCRoleGroup3</td><td class="bar-cell"><div class="bar" style="width: 23%"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Longest Disconnection Times</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Store ID</th>
+                        <th>Max Duration</th>
+                        <th>Avg Duration</th>
+                        <th>Median</th>
+                        <th>Events</th>
+                        <th>Federation Group</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td class="store-id">25937</td><td class="duration">8.1h</td><td>4.1h</td><td>4.1h</td><td>2</td><td class="fed-group">SBUXSCRoleGroup1</td></tr>
+                    <tr><td class="store-id">56863</td><td class="duration">8.0h</td><td>9.6m</td><td>9.6m</td><td>55</td><td class="fed-group">SBUXSCRoleGroup6</td></tr>
+                    <tr><td class="store-id">29086</td><td class="duration">6.0h</td><td>1.1h</td><td>1.1h</td><td>6</td><td class="fed-group">SBUXSCRoleGroup4</td></tr>
+                    <tr><td class="store-id">50833</td><td class="duration">2.2h</td><td>8.5m</td><td>8.5m</td><td>35</td><td class="fed-group">SBUXSCRoleGroup0</td></tr>
+                    <tr><td class="store-id">56075</td><td class="duration">1.8h</td><td>18.4m</td><td>18.4m</td><td>6</td><td class="fed-group">SBUXSCRoleGroup5</td></tr>
+                    <tr><td class="store-id">53864</td><td class="duration">1.8h</td><td>21.9m</td><td>21.9m</td><td>5</td><td class="fed-group">SBUXSCRoleGroup3</td></tr>
+                    <tr><td class="store-id">55030</td><td class="duration">1.8h</td><td>12.5m</td><td>12.5m</td><td>9</td><td class="fed-group">SBUXSCRoleGroup4</td></tr>
+                    <tr><td class="store-id">50827</td><td class="duration">1.8h</td><td>14.1m</td><td>14.1m</td><td>8</td><td class="fed-group">SBUXSCRoleGroup0</td></tr>
+                    <tr><td class="store-id">29497</td><td class="duration">1.4h</td><td>1.4h</td><td>1.4h</td><td>2</td><td class="fed-group">SBUXSCRoleGroup4</td></tr>
+                    <tr><td class="store-id">57604</td><td class="duration">1.4h</td><td>7.2m</td><td>7.2m</td><td>52</td><td class="fed-group">SBUXSCRoleGroup7</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Peak Activity Hours (Jan 9, 2026)</h2>
+            <div class="chart-container chart-container-small">
+                <canvas id="hourlyChart"></canvas>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Error Summary</h2>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px;">
+                <div>
+                    <span class="error-badge error-conn">Connection Failed</span>
+                    <strong style="margin-left: 10px;">282,200</strong>
+                </div>
+                <div>
+                    <span class="error-badge error-tls">TLS/SSL Errors</span>
+                    <strong style="margin-left: 10px;">10,892</strong>
+                </div>
+            </div>
+            <table style="margin-top: 20px;">
+                <thead>
+                    <tr>
+                        <th>Severity</th>
+                        <th>Count</th>
+                        <th>Percentage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Exception</td><td>298,520</td><td>96.5%</td></tr>
+                    <tr><td>Warning</td><td>10,373</td><td>3.4%</td></tr>
+                    <tr><td>Error</td><td>348</td><td>0.1%</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            Generated by Federation Log Analyzer v3 | Processed with 12-core multiprocessing<br>
+            Report generated: January 14, 2026
+        </footer>
+    </div>
+
+    <script>
+        // Daily Trend Chart
+        const dailyCtx = document.getElementById('dailyTrendChart').getContext('2d');
+        new Chart(dailyCtx, {
+            type: 'line',
+            data: {
+                labels: ['Dec 27', 'Dec 28', 'Dec 29', 'Dec 30', 'Dec 31', 'Jan 1', 'Jan 2', 'Jan 3', 'Jan 4', 'Jan 5', 'Jan 6', 'Jan 7', 'Jan 8', 'Jan 9', 'Jan 10', 'Jan 11'],
+                datasets: [{
+                    label: 'Disconnect Events',
+                    data: [3508, 4642, 6269, 5858, 5099, 15515, 15395, 15560, 103959, 574597, 281721, 1329622, 2048496, 2729521, 2641675, 2660886],
+                    borderColor: '#00d4ff',
+                    backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                    fill: true,
+                    tension: 0.4,
+                    pointBackgroundColor: '#00d4ff',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        titleColor: '#00d4ff',
+                        bodyColor: '#fff',
+                        callbacks: {
+                            label: (ctx) => ctx.parsed.y.toLocaleString() + ' disconnects'
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(255,255,255,0.1)' },
+                        ticks: { color: '#888' }
+                    },
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.1)' },
+                        ticks: {
+                            color: '#888',
+                            callback: (v) => (v / 1000000).toFixed(1) + 'M'
+                        }
+                    }
+                }
+            }
+        });
+
+        // Federation Group Chart
+        const fedCtx = document.getElementById('fedGroupChart').getContext('2d');
+        new Chart(fedCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Group 6', 'Group 5', 'Group 4', 'Group 2', 'Group 8', 'Group 1', 'Group 9', 'Group 3', 'Group 7', 'Group 0'],
+                datasets: [{
+                    data: [1279156, 1277600, 1265003, 1248183, 1242347, 1235028, 1222237, 1215581, 1215218, 1192796],
+                    backgroundColor: [
+                        '#ff6384', '#36a2eb', '#ffce56', '#4bc0c0', '#9966ff',
+                        '#ff9f40', '#00d4ff', '#7b2cbf', '#00ff88', '#ff6b6b'
+                    ],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#888', padding: 15 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.label + ': ' + ctx.parsed.toLocaleString()
+                        }
+                    }
+                }
+            }
+        });
+
+        // Error Chart
+        const errorCtx = document.getElementById('errorChart').getContext('2d');
+        new Chart(errorCtx, {
+            type: 'pie',
+            data: {
+                labels: ['Connection Failed', 'TLS/SSL Errors'],
+                datasets: [{
+                    data: [282200, 10892],
+                    backgroundColor: ['#ff6b6b', '#ff9f43'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#888', padding: 15 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.label + ': ' + ctx.parsed.toLocaleString()
+                        }
+                    }
+                }
+            }
+        });
+
+        // Hourly Chart (Jan 9 peak day)
+        const hourlyCtx = document.getElementById('hourlyChart').getContext('2d');
+        new Chart(hourlyCtx, {
+            type: 'bar',
+            data: {
+                labels: ['02:00', '03:00', '04:00', '05:00', '06:00', '07:00', '08:00'],
+                datasets: [{
+                    label: 'Disconnects',
+                    data: [119423, 119543, 119544, 119592, 119813, 119730, 119446],
+                    backgroundColor: 'rgba(0, 212, 255, 0.6)',
+                    borderColor: '#00d4ff',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.parsed.y.toLocaleString() + ' disconnects'
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#888' }
+                    },
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.1)' },
+                        ticks: { color: '#888' },
+                        min: 119000
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
