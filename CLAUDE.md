@@ -39,6 +39,24 @@ The tools analyze logs from federated Security Center deployments (specifically 
 ### MCP Server
 - **federation_mcp_server.py** - Model Context Protocol server exposing analysis tools. Configure in Claude Desktop using the pattern in `claude_desktop_config.example.json`
 
+## Output Format
+
+**Always generate HTML reports** after running any analyzer. Create a visually appealing HTML file (`federation_report.html`) with:
+- Summary stat cards with key metrics
+- Interactive Chart.js visualizations (line charts, donut charts, bar charts)
+- Styled tables for top problem stores, longest disconnections, etc.
+- Dark theme with gradient accents
+- Critical incident alerts when applicable
+- Open the report in the browser automatically after generation
+
+Example sections to include:
+- Daily disconnect trend (line chart)
+- Federation group distribution (donut chart)
+- Error type breakdown (pie chart)
+- Top 20 problem stores (table with visual bars)
+- Longest disconnection times (table)
+- Peak activity hours (bar chart)
+
 ## Running the Analyzers
 
 **File Management Workflow:**
