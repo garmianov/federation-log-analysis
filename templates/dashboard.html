@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Federation Log Dashboard - Interactive</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e8e8e8;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+        .stat-card .value {
+            font-size: 1.8em;
+            font-weight: bold;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .stat-card .label {
+            color: #888;
+            margin-top: 8px;
+            font-size: 0.9em;
+        }
+        .section {
+            background: rgba(255,255,255,0.03);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .section h2 {
+            color: #00d4ff;
+            margin-bottom: 20px;
+            font-size: 1.4em;
+            border-bottom: 2px solid rgba(0,212,255,0.3);
+            padding-bottom: 10px;
+        }
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .filter-group label {
+            font-size: 0.85em;
+            color: #888;
+        }
+        .filter-group select, .filter-group input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.3);
+            color: #e8e8e8;
+            font-size: 0.95em;
+            min-width: 150px;
+        }
+        .filter-group select:focus, .filter-group input:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95em;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            color: white;
+        }
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #e8e8e8;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 15px 0;
+        }
+        .chart-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        /* DataTables dark theme */
+        table.dataTable {
+            width: 100% !important;
+            border-collapse: collapse;
+        }
+        table.dataTable thead th {
+            background: rgba(0,212,255,0.15) !important;
+            color: #00d4ff !important;
+            padding: 12px !important;
+            border-bottom: 2px solid rgba(0,212,255,0.3) !important;
+            cursor: pointer;
+        }
+        table.dataTable thead th:hover {
+            background: rgba(0,212,255,0.25) !important;
+        }
+        table.dataTable tbody td {
+            padding: 10px 12px !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+            color: #e8e8e8 !important;
+        }
+        table.dataTable tbody tr:hover {
+            background: rgba(255,255,255,0.05) !important;
+        }
+        table.dataTable tbody tr.odd {
+            background: rgba(0,0,0,0.2) !important;
+        }
+        table.dataTable tbody tr.even {
+            background: rgba(0,0,0,0.1) !important;
+        }
+        .dataTables_wrapper {
+            color: #888 !important;
+        }
+        .dataTables_wrapper .dataTables_length select,
+        .dataTables_wrapper .dataTables_filter input {
+            background: rgba(0,0,0,0.3) !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
+            color: #e8e8e8 !important;
+            padding: 5px 10px !important;
+            border-radius: 4px !important;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button {
+            background: rgba(255,255,255,0.05) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            color: #e8e8e8 !important;
+            border-radius: 4px !important;
+            margin: 0 2px !important;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+            background: rgba(0,212,255,0.2) !important;
+            border-color: #00d4ff !important;
+            color: #00d4ff !important;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf) !important;
+            border: none !important;
+            color: white !important;
+        }
+        .server-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+        }
+        .badge-MS58187 { background: #e74c3c; }
+        .badge-MS63780 { background: #3498db; }
+        .badge-MS63868 { background: #9b59b6; }
+        .badge-MS63870 { background: #2ecc71; }
+        .highlight-red { color: #ff4757; }
+        .highlight-yellow { color: #ffd32a; }
+        .highlight-green { color: #2ecc71; }
+        .bar-fill {
+            height: 8px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 4px;
+            display: inline-block;
+            min-width: 5px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        .loading::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+        }
+        .summary-row .count {
+            font-size: 1.2em;
+            color: #00d4ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Federation Log Dashboard</h1>
+        <p class="subtitle">Interactive Analysis | 4 Servers | 175GB | 964M Lines</p>
+
+        <!-- Summary Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="value" id="stat-servers">{{ summary.total_servers }}</div>
+                <div class="label">Servers</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="stat-files">{{ "{:,}".format(summary.total_files) }}</div>
+                <div class="label">Log Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="stat-lines">{{ "%.1f"|format(summary.total_lines / 1000000) }}M</div>
+                <div class="label">Lines Processed</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="stat-disconnects">{{ "%.1f"|format(summary.total_disconnects / 1000000) }}M</div>
+                <div class="label">Disconnects</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="stat-stores">~{{ "{:,}".format(summary.total_stores) }}</div>
+                <div class="label">Stores</div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="chart-row">
+            <div class="section">
+                <h2>Disconnects by Server</h2>
+                <div class="chart-container">
+                    <canvas id="serverChart"></canvas>
+                </div>
+            </div>
+            <div class="section">
+                <h2>Daily Trend</h2>
+                <div class="chart-container">
+                    <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interactive Store Table -->
+        <div class="section">
+            <h2>Store Explorer</h2>
+
+            <!-- Filters -->
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Server</label>
+                    <select id="filter-server">
+                        <option value="">All Servers</option>
+                        <option value="MS58187">MS58187</option>
+                        <option value="MS63780">MS63780</option>
+                        <option value="MS63868">MS63868</option>
+                        <option value="MS63870">MS63870</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Federation Group</label>
+                    <select id="filter-fedgroup">
+                        <option value="">All Groups</option>
+                        <option value="SBUXSCRoleGroup0">RoleGroup0</option>
+                        <option value="SBUXSCRoleGroup1">RoleGroup1</option>
+                        <option value="SBUXSCRoleGroup2">RoleGroup2</option>
+                        <option value="SBUXSCRoleGroup3">RoleGroup3</option>
+                        <option value="SBUXSCRoleGroup4">RoleGroup4</option>
+                        <option value="SBUXSCRoleGroup5">RoleGroup5</option>
+                        <option value="SBUXSCRoleGroup6">RoleGroup6</option>
+                        <option value="SBUXSCRoleGroup7">RoleGroup7</option>
+                        <option value="SBUXSCRoleGroup8">RoleGroup8</option>
+                        <option value="SBUXSCRoleGroup9">RoleGroup9</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Min Disconnects</label>
+                    <input type="number" id="filter-min" placeholder="0" min="0" value="0">
+                </div>
+                <div class="filter-group">
+                    <label>Store ID Search</label>
+                    <input type="text" id="filter-search" placeholder="e.g. 11778">
+                </div>
+                <div class="filter-group" style="align-self: flex-end;">
+                    <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
+                </div>
+                <div class="filter-group" style="align-self: flex-end;">
+                    <button class="btn btn-secondary" onclick="resetFilters()">Reset</button>
+                </div>
+                <div class="filter-group" style="align-self: flex-end;">
+                    <button class="btn btn-secondary" onclick="exportCSV()">Export CSV</button>
+                </div>
+            </div>
+
+            <!-- Results Summary -->
+            <div class="summary-row">
+                <span>Showing <span class="count" id="result-count">0</span> stores</span>
+                <span>Total Disconnects: <span class="count" id="result-disconnects">0</span></span>
+            </div>
+
+            <!-- Data Table -->
+            <table id="storeTable" class="display">
+                <thead>
+                    <tr>
+                        <th>Store ID</th>
+                        <th>Server</th>
+                        <th>Fed Group</th>
+                        <th>Disconnects</th>
+                        <th>Max Duration</th>
+                        <th>Avg Duration</th>
+                        <th>Visual</th>
+                    </tr>
+                </thead>
+                <tbody id="storeTableBody">
+                    <tr><td colspan="7" class="loading">Loading data</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Server Summary Table -->
+        <div class="section">
+            <h2>Server Summary</h2>
+            <table id="serverTable" class="display">
+                <thead>
+                    <tr>
+                        <th>Server</th>
+                        <th>Files</th>
+                        <th>Lines</th>
+                        <th>Stores</th>
+                        <th>Disconnects</th>
+                        <th>Avg/Store</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for name, server in servers.items() %}
+                    <tr>
+                        <td><span class="server-badge badge-{{ name }}">{{ name }}</span></td>
+                        <td>{{ "{:,}".format(server.files) }}</td>
+                        <td>{{ "%.1f"|format(server.lines / 1000000) }}M</td>
+                        <td>{{ "{:,}".format(server.stores) }}</td>
+                        <td>{{ "{:,}".format(server.disconnects) }}</td>
+                        <td>{{ "{:,}".format((server.disconnects / server.stores)|int) }}</td>
+                        <td>
+                            {% if server.disconnects / server.stores > 5000 %}
+                            <span class="highlight-red">Critical</span>
+                            {% elif server.disconnects / server.stores > 3000 %}
+                            <span class="highlight-yellow">Warning</span>
+                            {% else %}
+                            <span class="highlight-green">OK</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let storeTable;
+        let allStores = [];
+        let maxDisconnects = 1;
+
+        // Initialize on page load
+        $(document).ready(function() {
+            loadStores();
+            initCharts();
+
+            // Make server table sortable
+            $('#serverTable').DataTable({
+                paging: false,
+                searching: false,
+                info: false,
+                order: [[4, 'desc']]
+            });
+        });
+
+        function loadStores() {
+            const server = $('#filter-server').val();
+            const fedGroup = $('#filter-fedgroup').val();
+            const minDisconnects = $('#filter-min').val() || 0;
+            const search = $('#filter-search').val();
+
+            let url = `/api/stores?perPage=1000&minDisconnects=${minDisconnects}`;
+            if (server) url += `&server=${server}`;
+            if (fedGroup) url += `&fedGroup=${fedGroup}`;
+            if (search) url += `&search=${search}`;
+
+            $.getJSON(url, function(response) {
+                allStores = response.data;
+                maxDisconnects = Math.max(...allStores.map(s => s.disconnects), 1);
+
+                // Update summary
+                $('#result-count').text(response.total.toLocaleString());
+                const totalDisc = allStores.reduce((sum, s) => sum + s.disconnects, 0);
+                $('#result-disconnects').text(totalDisc.toLocaleString());
+
+                // Rebuild table
+                renderTable();
+            });
+        }
+
+        function renderTable() {
+            // Destroy existing DataTable if it exists
+            if (storeTable) {
+                storeTable.destroy();
+            }
+
+            // Build table body
+            let html = '';
+            allStores.forEach(store => {
+                const barWidth = Math.max(5, (store.disconnects / maxDisconnects) * 100);
+                html += `<tr>
+                    <td><strong>${store.store_id}</strong></td>
+                    <td><span class="server-badge badge-${store.server}">${store.server}</span></td>
+                    <td>${store.fed_group.replace('SBUXSCRoleGroup', 'RG')}</td>
+                    <td>${store.disconnects.toLocaleString()}</td>
+                    <td>${store.max_duration || '-'}</td>
+                    <td>${store.avg_duration || '-'}</td>
+                    <td><div class="bar-fill" style="width: ${barWidth}%"></div></td>
+                </tr>`;
+            });
+
+            $('#storeTableBody').html(html || '<tr><td colspan="7">No stores found</td></tr>');
+
+            // Reinitialize DataTable
+            storeTable = $('#storeTable').DataTable({
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
+                order: [[3, 'desc']],
+                columnDefs: [
+                    { orderable: false, targets: 6 }
+                ]
+            });
+        }
+
+        function applyFilters() {
+            loadStores();
+        }
+
+        function resetFilters() {
+            $('#filter-server').val('');
+            $('#filter-fedgroup').val('');
+            $('#filter-min').val(0);
+            $('#filter-search').val('');
+            loadStores();
+        }
+
+        function exportCSV() {
+            const server = $('#filter-server').val();
+            const fedGroup = $('#filter-fedgroup').val();
+            const minDisconnects = $('#filter-min').val() || 0;
+
+            let url = `/api/export?minDisconnects=${minDisconnects}`;
+            if (server) url += `&server=${server}`;
+            if (fedGroup) url += `&fedGroup=${fedGroup}`;
+
+            window.location.href = url;
+        }
+
+        function initCharts() {
+            // Server donut chart
+            new Chart(document.getElementById('serverChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['MS58187', 'MS63780', 'MS63868', 'MS63870'],
+                    datasets: [{
+                        data: [2758905, 5573454, 7595992, 2959909],
+                        backgroundColor: ['#e74c3c', '#3498db', '#9b59b6', '#2ecc71'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { color: '#e8e8e8', padding: 15 }
+                        }
+                    }
+                }
+            });
+
+            // Daily trend chart
+            new Chart(document.getElementById('trendChart'), {
+                type: 'line',
+                data: {
+                    labels: ['Jan 8', 'Jan 9', 'Jan 10', 'Jan 11', 'Jan 12', 'Jan 13', 'Jan 14', 'Jan 15', 'Jan 16'],
+                    datasets: [
+                        {
+                            label: 'MS58187',
+                            data: [123, 6403, 7827, 8105, 3040, 8199, 263543, 1375890, 1085775],
+                            borderColor: '#e74c3c',
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'MS63780',
+                            data: [0, 0, 0, 0, 233015, 1434489, 1435086, 1436720, 1034144],
+                            borderColor: '#3498db',
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'MS63868',
+                            data: [0, 0, 57, 962040, 1403255, 1397905, 1393628, 1397723, 1041384],
+                            borderColor: '#9b59b6',
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'MS63870',
+                            data: [79, 122967, 1434397, 1360631, 10274, 9138, 10184, 6765, 5474],
+                            borderColor: '#2ecc71',
+                            tension: 0.4,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: { color: '#e8e8e8', boxWidth: 12 }
+                        }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' }},
+                        y: {
+                            ticks: {
+                                color: '#888',
+                                callback: v => v >= 1000000 ? (v/1000000).toFixed(1) + 'M' : v >= 1000 ? (v/1000).toFixed(0) + 'K' : v
+                            },
+                            grid: { color: 'rgba(255,255,255,0.05)' }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>

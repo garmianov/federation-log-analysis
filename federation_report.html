@@ -3,600 +3,647 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Federation Log Analysis Report</title>
+    <title>Federation Log Analysis Report - Multi-Server</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {
-            --bg-primary: #1a1a2e;
-            --bg-secondary: #16213e;
-            --bg-card: #0f3460;
-            --text-primary: #eee;
-            --text-secondary: #aaa;
-            --accent: #e94560;
-            --accent2: #00d9ff;
-            --accent3: #00ff88;
-            --border: #333;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            line-height: 1.6;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e8e8e8;
+            min-height: 100vh;
             padding: 20px;
         }
-        .container { max-width: 1600px; margin: 0 auto; }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
         h1 {
             text-align: center;
-            color: var(--accent2);
-            margin-bottom: 10px;
             font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         .subtitle {
             text-align: center;
-            color: var(--text-secondary);
+            color: #888;
             margin-bottom: 30px;
+            font-size: 1.1em;
         }
-        .summary-grid {
+        .alert-banner {
+            background: linear-gradient(90deg, #ff4757, #c0392b);
+            padding: 15px 25px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .alert-banner .icon {
+            font-size: 2em;
+        }
+        .alert-banner .text h3 {
+            margin-bottom: 5px;
+        }
+        .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
-        .summary-card {
-            background: var(--bg-card);
-            padding: 20px;
-            border-radius: 10px;
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
             text-align: center;
-            border-left: 4px solid var(--accent);
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
         }
-        .summary-card.accent2 { border-left-color: var(--accent2); }
-        .summary-card.accent3 { border-left-color: var(--accent3); }
-        .summary-card h3 { color: var(--text-secondary); font-size: 0.9em; margin-bottom: 5px; }
-        .summary-card .value { font-size: 2em; font-weight: bold; color: var(--text-primary); }
-        .chart-container {
-            background: var(--bg-secondary);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 30px;
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
         }
-        .chart-title {
-            color: var(--accent2);
-            margin-bottom: 15px;
-            font-size: 1.3em;
-            border-bottom: 1px solid var(--border);
+        .stat-card .value {
+            font-size: 2.2em;
+            font-weight: bold;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .stat-card .label {
+            color: #888;
+            margin-top: 10px;
+            font-size: 0.95em;
+        }
+        .section {
+            background: rgba(255,255,255,0.03);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .section h2 {
+            color: #00d4ff;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 2px solid rgba(0,212,255,0.3);
             padding-bottom: 10px;
+        }
+        .chart-container {
+            position: relative;
+            height: 350px;
+            margin: 20px 0;
         }
         .chart-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-            gap: 20px;
-        }
-        .server-section {
-            background: var(--bg-secondary);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 30px;
-            border-left: 4px solid var(--accent);
-        }
-        .server-title {
-            color: var(--accent);
-            font-size: 1.5em;
-            margin-bottom: 15px;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 25px;
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            margin: 15px 0;
+            margin-top: 15px;
         }
         th, td {
-            padding: 12px;
+            padding: 12px 15px;
             text-align: left;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
         }
         th {
-            background: var(--bg-card);
-            color: var(--accent2);
+            background: rgba(0,212,255,0.1);
+            color: #00d4ff;
+            font-weight: 600;
         }
-        tr:hover { background: rgba(255,255,255,0.05); }
-        .highlight { color: var(--accent); font-weight: bold; }
-        .warning { color: #ffcc00; }
-        .critical { color: #ff4444; }
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
+        tr:hover {
+            background: rgba(255,255,255,0.05);
         }
-        .tab {
-            padding: 10px 20px;
-            background: var(--bg-card);
-            border: none;
-            color: var(--text-primary);
-            cursor: pointer;
-            border-radius: 5px;
-            transition: all 0.3s;
+        .bar-cell {
+            position: relative;
         }
-        .tab:hover, .tab.active {
-            background: var(--accent);
+        .bar-fill {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 8px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 4px;
+            opacity: 0.7;
         }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .fed-group-grid {
+        .bar-value {
+            position: relative;
+            z-index: 1;
+        }
+        .server-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            margin-left: 8px;
+        }
+        .badge-ms58187 { background: #e74c3c; }
+        .badge-ms63780 { background: #3498db; }
+        .badge-ms63868 { background: #9b59b6; }
+        .badge-ms63870 { background: #2ecc71; }
+        .grid-2 {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .grid-2, .chart-row {
+                grid-template-columns: 1fr;
+            }
+        }
+        .highlight-red { color: #ff4757; }
+        .highlight-yellow { color: #ffd32a; }
+        .highlight-green { color: #2ecc71; }
+        .summary-table {
             margin-top: 20px;
         }
-        .fed-group-card {
-            background: var(--bg-card);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
+        .summary-table td:first-child {
+            font-weight: bold;
+            color: #00d4ff;
         }
-        .fed-group-card h4 { color: var(--accent2); margin-bottom: 10px; }
-        .fed-group-card .stores { color: var(--text-secondary); font-size: 0.9em; }
-        .fed-group-card .disconnects { font-size: 1.4em; font-weight: bold; }
-        canvas { max-height: 400px; }
-        .insights {
-            background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
-            padding: 25px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            border-left: 4px solid var(--accent3);
-        }
-        .insights h2 { color: var(--accent3); margin-bottom: 15px; }
-        .insights ul { margin-left: 20px; }
-        .insights li { margin-bottom: 10px; }
-        .comparison-table th { text-align: center; }
-        .comparison-table td { text-align: center; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Federation Log Analysis Report</h1>
-        <p class="subtitle">Multi-Server Analysis | Generated: January 14, 2026 | Analyzer: v3 Streaming</p>
+        <p class="subtitle">Generated: January 16, 2026 | 4 Servers | 175GB | 964M Lines Analyzed</p>
 
-        <!-- Summary Cards -->
-        <div class="summary-grid">
-            <div class="summary-card">
-                <h3>Servers Analyzed</h3>
+        <div class="alert-banner">
+            <div class="icon">⚠</div>
+            <div class="text">
+                <h3>Critical: 18.9 Million Disconnect Events Detected</h3>
+                <p>Major outage periods identified on Jan 10-11 (MS63870) and Jan 14-16 (MS58187). MS63868 shows highest sustained disconnect rate.</p>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
                 <div class="value">4</div>
+                <div class="label">Federation Servers</div>
             </div>
-            <div class="summary-card accent2">
-                <h3>Total Log Files</h3>
-                <div class="value">10,067</div>
+            <div class="stat-card">
+                <div class="value">19,083</div>
+                <div class="label">Log Files Analyzed</div>
             </div>
-            <div class="summary-card accent3">
-                <h3>Total Lines Processed</h3>
-                <div class="value">557M</div>
+            <div class="stat-card">
+                <div class="value">964.6M</div>
+                <div class="label">Lines Processed</div>
             </div>
-            <div class="summary-card">
-                <h3>Total Stores</h3>
-                <div class="value">3,692</div>
+            <div class="stat-card">
+                <div class="value">18.9M</div>
+                <div class="label">Disconnect Events</div>
             </div>
-            <div class="summary-card accent2">
-                <h3>Total Disconnects</h3>
-                <div class="value">12.6M</div>
+            <div class="stat-card">
+                <div class="value">~3,900</div>
+                <div class="label">Unique Stores</div>
             </div>
-            <div class="summary-card accent3">
-                <h3>Data Size</h3>
-                <div class="value">93 GB</div>
-            </div>
-        </div>
-
-        <!-- Key Insights -->
-        <div class="insights">
-            <h2>Key Insights</h2>
-            <ul>
-                <li><strong>Critical Issue on MS63870 & MS63871:</strong> Massive disconnect spike starting Jan 8, 2026 with 1.3M+ disconnects per day affecting nearly all stores (989/974 stores)</li>
-                <li><strong>Pattern:</strong> Federation groups show uniform high disconnect rates (~5,500-7,200 avg/store) on main servers vs low rates (11-258 avg/store) on backup servers</li>
-                <li><strong>Top Problem Stores:</strong> Store 29393 (29K disconnects), Store 26924 (15K), Store 58630/57419/51734 (15K each)</li>
-                <li><strong>Error Types:</strong> 95%+ are connection failures, with TLS/SSL errors as secondary issue</li>
-                <li><strong>Outage Correlation:</strong> Peak disconnect hours align across servers, suggesting infrastructure-level issues</li>
-            </ul>
-        </div>
-
-        <!-- Server Comparison Chart -->
-        <div class="chart-container">
-            <h2 class="chart-title">Server Comparison</h2>
-            <canvas id="serverComparisonChart"></canvas>
-        </div>
-
-        <!-- Charts Row -->
-        <div class="chart-row">
-            <div class="chart-container">
-                <h2 class="chart-title">Disconnects by Server</h2>
-                <canvas id="serverPieChart"></canvas>
-            </div>
-            <div class="chart-container">
-                <h2 class="chart-title">Daily Disconnect Trend (All Servers)</h2>
-                <canvas id="dailyTrendChart"></canvas>
+            <div class="stat-card">
+                <div class="value">371K</div>
+                <div class="label">Errors/Warnings</div>
             </div>
         </div>
 
-        <!-- Federation Groups Comparison -->
-        <div class="chart-container">
-            <h2 class="chart-title">Federation Groups Comparison Across Servers</h2>
-            <canvas id="fedGroupChart"></canvas>
-        </div>
-
-        <!-- Server Tabs -->
-        <div class="tabs">
-            <button class="tab active" onclick="showTab('all')">All Servers</button>
-            <button class="tab" onclick="showTab('ms63870')">MS63870</button>
-            <button class="tab" onclick="showTab('ms63871')">MS63871</button>
-            <button class="tab" onclick="showTab('ms563871')">MS563871</button>
-            <button class="tab" onclick="showTab('ms58138')">MS58138</button>
-        </div>
-
-        <!-- All Servers Summary -->
-        <div id="all" class="tab-content active">
-            <div class="server-section">
-                <h2 class="server-title">Combined Server Summary</h2>
-                <table class="comparison-table">
+        <div class="section">
+            <h2>Multi-Server Summary</h2>
+            <table>
+                <thead>
                     <tr>
                         <th>Server</th>
                         <th>Files</th>
                         <th>Lines</th>
                         <th>Stores</th>
                         <th>Disconnects</th>
-                        <th>Time Range</th>
+                        <th>Avg/Store</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>MS58187</strong></td>
+                        <td>6,042</td>
+                        <td>218.3M</td>
+                        <td>984</td>
+                        <td class="bar-cell">
+                            <div class="bar-fill" style="width: 36%; background: linear-gradient(90deg, #e74c3c, #c0392b);"></div>
+                            <span class="bar-value">2,758,905</span>
+                        </td>
+                        <td>2,804</td>
+                        <td><span class="highlight-yellow">Warning</span></td>
                     </tr>
                     <tr>
-                        <td>MS63870</td>
-                        <td>5,419</td>
-                        <td>300.5M</td>
+                        <td><strong>MS63780</strong></td>
+                        <td>5,139</td>
+                        <td>298.8M</td>
                         <td>989</td>
-                        <td class="critical">5,533,679</td>
-                        <td>Dec 27 - Jan 11</td>
+                        <td class="bar-cell">
+                            <div class="bar-fill" style="width: 73%; background: linear-gradient(90deg, #3498db, #2980b9);"></div>
+                            <span class="bar-value">5,573,454</span>
+                        </td>
+                        <td>5,635</td>
+                        <td><span class="highlight-red">Critical</span></td>
                     </tr>
                     <tr>
-                        <td>MS63871</td>
-                        <td>4,397</td>
-                        <td>256.1M</td>
-                        <td>974</td>
-                        <td class="critical">6,930,778</td>
-                        <td>Jan 4 - Jan 11</td>
+                        <td><strong>MS63868</strong></td>
+                        <td>5,150</td>
+                        <td>295.0M</td>
+                        <td>953</td>
+                        <td class="bar-cell">
+                            <div class="bar-fill" style="width: 100%; background: linear-gradient(90deg, #9b59b6, #8e44ad);"></div>
+                            <span class="bar-value">7,595,992</span>
+                        </td>
+                        <td>7,971</td>
+                        <td><span class="highlight-red">Critical</span></td>
                     </tr>
                     <tr>
-                        <td>MS563871</td>
-                        <td>198</td>
-                        <td>468K</td>
-                        <td>935</td>
-                        <td class="warning">125,925</td>
-                        <td>Dec 31 - Jan 11</td>
+                        <td><strong>MS63870</strong></td>
+                        <td>2,752</td>
+                        <td>152.6M</td>
+                        <td>989</td>
+                        <td class="bar-cell">
+                            <div class="bar-fill" style="width: 39%; background: linear-gradient(90deg, #2ecc71, #27ae60);"></div>
+                            <span class="bar-value">2,959,909</span>
+                        </td>
+                        <td>2,993</td>
+                        <td><span class="highlight-yellow">Warning</span></td>
                     </tr>
-                    <tr>
-                        <td>MS58138</td>
-                        <td>53</td>
-                        <td>195K</td>
-                        <td>794</td>
-                        <td>45,369</td>
-                        <td>Oct 14 - Oct 24</td>
-                    </tr>
-                </table>
+                </tbody>
+            </table>
+        </div>
 
-                <h3 style="margin-top: 30px; color: var(--accent2);">Federation Groups by Server (stores/disconnects)</h3>
-                <table class="comparison-table" style="font-size: 0.9em;">
+        <div class="section">
+            <h2>Daily Disconnect Trends by Server</h2>
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="dailyTrendChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="section">
+                <h2>Disconnects by Server</h2>
+                <div class="chart-container">
+                    <canvas id="serverDonutChart"></canvas>
+                </div>
+            </div>
+            <div class="section">
+                <h2>Error Type Distribution</h2>
+                <div class="chart-container">
+                    <canvas id="errorTypeChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Federation Groups Across Servers</h2>
+            <div class="chart-container" style="height: 450px;">
+                <canvas id="fedGroupChart"></canvas>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Top 20 Problem Stores (All Servers)</h2>
+            <table>
+                <thead>
                     <tr>
+                        <th>Rank</th>
+                        <th>Store</th>
+                        <th>Server</th>
                         <th>Fed Group</th>
-                        <th>MS563871</th>
-                        <th>MS58138</th>
-                        <th>MS63870</th>
-                        <th>MS63871</th>
+                        <th>Disconnects</th>
+                        <th>Visual</th>
                     </tr>
-                    <tr><td>SBUXSCRoleGroup0</td><td>91s/1,007dc</td><td>72s/3,013dc</td><td>97s/539,888dc</td><td>94s/665,108dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup1</td><td>93s/20,253dc</td><td>100s/20,336dc</td><td>98s/540,471dc</td><td>96s/686,299dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup2</td><td>98s/4,630dc</td><td>65s/7,547dc</td><td>100s/594,993dc</td><td>99s/700,623dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup3</td><td>92s/2,306dc</td><td>86s/945dc</td><td>97s/534,926dc</td><td>99s/698,886dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup4</td><td>94s/20,182dc</td><td>86s/1,354dc</td><td>100s/574,936dc</td><td>96s/687,947dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup5</td><td>100s/2,288dc</td><td>85s/6,172dc</td><td>104s/575,220dc</td><td>101s/712,770dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup6</td><td>94s/42,102dc</td><td>90s/1,192dc</td><td>97s/538,069dc</td><td>98s/712,741dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup7</td><td>96s/2,469dc</td><td>87s/737dc</td><td>98s/541,396dc</td><td>97s/684,701dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup8</td><td>96s/19,153dc</td><td>84s/2,203dc</td><td>98s/540,635dc</td><td>98s/700,591dc</td></tr>
-                    <tr><td>SBUXSCRoleGroup9</td><td>93s/11,535dc</td><td>87s/1,870dc</td><td>98s/541,773dc</td><td>96s/681,112dc</td></tr>
-                </table>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>11778</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup1</td><td>25,250</td><td class="bar-cell"><div class="bar-fill" style="width: 100%;"></div></td></tr>
+                    <tr><td>2</td><td>11698</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup1</td><td>25,249</td><td class="bar-cell"><div class="bar-fill" style="width: 100%;"></div></td></tr>
+                    <tr><td>3</td><td>13864</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup5</td><td>24,778</td><td class="bar-cell"><div class="bar-fill" style="width: 98%;"></div></td></tr>
+                    <tr><td>4</td><td>27053</td><td><span class="server-badge badge-ms63870">MS63870</span></td><td>RoleGroup2</td><td>19,740</td><td class="bar-cell"><div class="bar-fill" style="width: 78%;"></div></td></tr>
+                    <tr><td>5</td><td>17221</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup9</td><td>18,308</td><td class="bar-cell"><div class="bar-fill" style="width: 73%;"></div></td></tr>
+                    <tr><td>6</td><td>07772</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td>RoleGroup9</td><td>17,267</td><td class="bar-cell"><div class="bar-fill" style="width: 68%;"></div></td></tr>
+                    <tr><td>7</td><td>06826</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td>RoleGroup4</td><td>15,399</td><td class="bar-cell"><div class="bar-fill" style="width: 61%;"></div></td></tr>
+                    <tr><td>8</td><td>11879</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup2</td><td>13,991</td><td class="bar-cell"><div class="bar-fill" style="width: 55%;"></div></td></tr>
+                    <tr><td>9</td><td>11905</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup2</td><td>13,864</td><td class="bar-cell"><div class="bar-fill" style="width: 55%;"></div></td></tr>
+                    <tr><td>10</td><td>11735</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup1</td><td>12,931</td><td class="bar-cell"><div class="bar-fill" style="width: 51%;"></div></td></tr>
+                    <tr><td>11</td><td>27053</td><td><span class="server-badge badge-ms63780">MS63780</span></td><td>RoleGroup2</td><td>12,137</td><td class="bar-cell"><div class="bar-fill" style="width: 48%;"></div></td></tr>
+                    <tr><td>12</td><td>29393</td><td><span class="server-badge badge-ms63780">MS63780</span></td><td>RoleGroup4</td><td>12,127</td><td class="bar-cell"><div class="bar-fill" style="width: 48%;"></div></td></tr>
+                    <tr><td>13</td><td>07866</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td>RoleGroup9</td><td>11,869</td><td class="bar-cell"><div class="bar-fill" style="width: 47%;"></div></td></tr>
+                    <tr><td>14</td><td>25052</td><td><span class="server-badge badge-ms63870">MS63870</span></td><td>RoleGroup0</td><td>11,479</td><td class="bar-cell"><div class="bar-fill" style="width: 45%;"></div></td></tr>
+                    <tr><td>15</td><td>13326</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup3</td><td>10,239</td><td class="bar-cell"><div class="bar-fill" style="width: 41%;"></div></td></tr>
+                    <tr><td>16</td><td>14716</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td>RoleGroup8</td><td>9,634</td><td class="bar-cell"><div class="bar-fill" style="width: 38%;"></div></td></tr>
+                    <tr><td>17</td><td>47715</td><td><span class="server-badge badge-ms63780">MS63780</span></td><td>RoleGroup6</td><td>8,201</td><td class="bar-cell"><div class="bar-fill" style="width: 32%;"></div></td></tr>
+                    <tr><td>18</td><td>06617</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td>RoleGroup3</td><td>7,342</td><td class="bar-cell"><div class="bar-fill" style="width: 29%;"></div></td></tr>
+                    <tr><td>19</td><td>48156</td><td><span class="server-badge badge-ms63780">MS63780</span></td><td>RoleGroup6</td><td>7,071</td><td class="bar-cell"><div class="bar-fill" style="width: 28%;"></div></td></tr>
+                    <tr><td>20</td><td>06671</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td>RoleGroup3</td><td>7,037</td><td class="bar-cell"><div class="bar-fill" style="width: 28%;"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>Longest Disconnection Times</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Store</th>
+                        <th>Server</th>
+                        <th>Max Duration</th>
+                        <th>Avg Duration</th>
+                        <th>Fed Group</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>27215</td><td><span class="server-badge badge-ms63870">MS63870</span></td><td class="highlight-red">12.7 hours</td><td>51.3 min</td><td>RoleGroup2</td></tr>
+                    <tr><td>25946</td><td><span class="server-badge badge-ms63870">MS63870</span></td><td class="highlight-red">11.7 hours</td><td>11.7 hours</td><td>RoleGroup1</td></tr>
+                    <tr><td>06422</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-red">8.8 hours</td><td>41.2 min</td><td>RoleGroup1</td></tr>
+                    <tr><td>06404</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-red">7.9 hours</td><td>4.0 hours</td><td>RoleGroup1</td></tr>
+                    <tr><td>06589</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-red">7.9 hours</td><td>7.2 min</td><td>RoleGroup2</td></tr>
+                    <tr><td>13503</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td class="highlight-red">7.2 hours</td><td>1.2 min</td><td>RoleGroup4</td></tr>
+                    <tr><td>06953</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-yellow">4.1 hours</td><td>54.1 min</td><td>RoleGroup5</td></tr>
+                    <tr><td>06305</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-yellow">3.4 hours</td><td>27 sec</td><td>RoleGroup0</td></tr>
+                    <tr><td>13445</td><td><span class="server-badge badge-ms63868">MS63868</span></td><td class="highlight-yellow">2.8 hours</td><td>4.9 min</td><td>RoleGroup3</td></tr>
+                    <tr><td>06733</td><td><span class="server-badge badge-ms58187">MS58187</span></td><td class="highlight-yellow">2.1 hours</td><td>7.6 min</td><td>RoleGroup3</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>Peak Activity Hours (Potential Outages)</h2>
+            <div class="chart-container">
+                <canvas id="peakHoursChart"></canvas>
             </div>
         </div>
 
-        <!-- MS63870 -->
-        <div id="ms63870" class="tab-content">
-            <div class="server-section" style="border-left-color: #ff6384;">
-                <h2 class="server-title">MS63870 - Primary Federation Server</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    Time Range: Dec 27, 2025 - Jan 11, 2026 | 5,419 files | 300.5M lines | 989 stores | 5.5M disconnects
-                </p>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Top 20 Stores by Disconnect Count</h3>
-                <table>
-                    <tr><th>Rank</th><th>Store</th><th>Disconnects</th><th>Federation Group</th></tr>
-                    <tr><td>1</td><td class="highlight">29393</td><td class="critical">29,235</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>2</td><td>26924</td><td class="critical">14,686</td><td>SBUXSCRoleGroup2</td></tr>
-                    <tr><td>3</td><td>25466</td><td class="warning">10,653</td><td>SBUXSCRoleGroup0</td></tr>
-                    <tr><td>4</td><td>48156</td><td class="warning">9,023</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>5</td><td>29793</td><td>6,653</td><td>SBUXSCRoleGroup5</td></tr>
-                    <tr><td>6</td><td>48923</td><td>6,513</td><td>SBUXSCRoleGroup7</td></tr>
-                    <tr><td>7</td><td>29374</td><td>6,462</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>8</td><td>49896</td><td>6,445</td><td>SBUXSCRoleGroup9</td></tr>
-                    <tr><td>9</td><td>26926</td><td>6,348</td><td>SBUXSCRoleGroup2</td></tr>
-                    <tr><td>10</td><td>26561</td><td>6,233</td><td>SBUXSCRoleGroup1</td></tr>
-                </table>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Longest Disconnection Times</h3>
-                <table>
-                    <tr><th>Store</th><th>Max</th><th>Avg</th><th>Count</th><th>Fed Group</th></tr>
-                    <tr><td>25937</td><td class="critical">8.1h</td><td>4.1h</td><td>2</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>29086</td><td class="critical">6.0h</td><td>1.1h</td><td>6</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>29497</td><td>1.4h</td><td>1.4h</td><td>2</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>49896</td><td>1.1h</td><td>1.2m</td><td>93</td><td>SBUXSCRoleGroup9</td></tr>
-                    <tr><td>48156</td><td>42.7m</td><td>38s</td><td>1,061</td><td>SBUXSCRoleGroup6</td></tr>
-                </table>
+        <div class="section">
+            <h2>Error Analysis Summary</h2>
+            <div class="grid-2">
+                <div>
+                    <h3 style="color: #00d4ff; margin-bottom: 15px;">By Type</h3>
+                    <table class="summary-table">
+                        <tr><td>Exceptions</td><td>332,683</td></tr>
+                        <tr><td>Warnings</td><td>37,761</td></tr>
+                        <tr><td>Errors</td><td>1,293</td></tr>
+                    </table>
+                </div>
+                <div>
+                    <h3 style="color: #00d4ff; margin-bottom: 15px;">By Category</h3>
+                    <table class="summary-table">
+                        <tr><td>Connection Failed</td><td>301,537</td></tr>
+                        <tr><td>TLS/SSL Errors</td><td>18,400</td></tr>
+                    </table>
+                </div>
             </div>
         </div>
 
-        <!-- MS63871 -->
-        <div id="ms63871" class="tab-content">
-            <div class="server-section" style="border-left-color: #36a2eb;">
-                <h2 class="server-title">MS63871 - Secondary Federation Server</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    Time Range: Jan 4 - Jan 11, 2026 | 4,397 files | 256.1M lines | 974 stores | 6.9M disconnects
-                </p>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Top 20 Stores by Disconnect Count</h3>
-                <table>
-                    <tr><th>Rank</th><th>Store</th><th>Disconnects</th><th>Federation Group</th></tr>
-                    <tr><td>1</td><td class="highlight">58630</td><td class="critical">15,359</td><td>SBUXSCRoleGroup8</td></tr>
-                    <tr><td>2</td><td>57419</td><td class="critical">15,358</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>3</td><td>51734</td><td class="critical">15,350</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>4</td><td>57282</td><td class="critical">14,608</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>5</td><td>56762</td><td class="warning">9,840</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>6</td><td>53591</td><td class="warning">9,078</td><td>SBUXSCRoleGroup2</td></tr>
-                    <tr><td>7</td><td>56881</td><td class="warning">8,800</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>8</td><td>58910</td><td class="warning">8,504</td><td>SBUXSCRoleGroup9</td></tr>
-                    <tr><td>9</td><td>54605</td><td>7,548</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>10</td><td>52398</td><td>7,447</td><td>SBUXSCRoleGroup2</td></tr>
-                </table>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Longest Disconnection Times</h3>
-                <table>
-                    <tr><th>Store</th><th>Max</th><th>Avg</th><th>Count</th><th>Fed Group</th></tr>
-                    <tr><td>56075</td><td>1.8h</td><td>18.4m</td><td>6</td><td>SBUXSCRoleGroup5</td></tr>
-                    <tr><td>53864</td><td>1.8h</td><td>21.9m</td><td>5</td><td>SBUXSCRoleGroup3</td></tr>
-                    <tr><td>55030</td><td>1.8h</td><td>12.5m</td><td>9</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>50827</td><td>1.8h</td><td>14.1m</td><td>8</td><td>SBUXSCRoleGroup0</td></tr>
-                </table>
-            </div>
+        <div class="section">
+            <h2>Recommendations</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Priority</th>
+                        <th>Target</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="highlight-red">Critical</span></td>
+                        <td>MS63868</td>
+                        <td>Investigate highest disconnect rate (7.97M events). Check network infrastructure and RoleGroup8 stores specifically.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="highlight-red">Critical</span></td>
+                        <td>Stores 11778, 11698, 13864</td>
+                        <td>These stores have 25K+ disconnects each. Likely hardware or network issues requiring immediate attention.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="highlight-red">Critical</span></td>
+                        <td>MS63870 Jan 10-11</td>
+                        <td>Investigate what caused the massive spike (2.8M disconnects in 2 days vs ~10K/day normally).</td>
+                    </tr>
+                    <tr>
+                        <td><span class="highlight-yellow">High</span></td>
+                        <td>Store 27215, 25946</td>
+                        <td>Longest disconnection times (12+ hours). May indicate persistent network issues or failed equipment.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="highlight-yellow">High</span></td>
+                        <td>TLS/SSL Errors</td>
+                        <td>18,400 TLS errors detected. Review certificate validity and SSL configuration across federation.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="highlight-yellow">Medium</span></td>
+                        <td>RoleGroup0</td>
+                        <td>Consistently highest disconnect rates across servers. May indicate configuration issues with this group.</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
-
-        <!-- MS563871 -->
-        <div id="ms563871" class="tab-content">
-            <div class="server-section" style="border-left-color: #ffce56;">
-                <h2 class="server-title">MS563871 - Backup Federation Server</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    Time Range: Dec 31, 2025 - Jan 11, 2026 | 198 files | 468K lines | 935 stores | 126K disconnects
-                </p>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Top 10 Stores by Disconnect Count</h3>
-                <table>
-                    <tr><th>Rank</th><th>Store</th><th>Disconnects</th><th>Federation Group</th></tr>
-                    <tr><td>1</td><td class="highlight">51734</td><td class="critical">18,312</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>2</td><td>55244</td><td class="critical">18,311</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>3</td><td>58630</td><td class="critical">18,311</td><td>SBUXSCRoleGroup8</td></tr>
-                    <tr><td>4</td><td>58910</td><td class="warning">10,600</td><td>SBUXSCRoleGroup9</td></tr>
-                    <tr><td>5</td><td>57282</td><td class="warning">10,475</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>6</td><td>56762</td><td class="warning">9,267</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>7</td><td>53591</td><td>2,832</td><td>SBUXSCRoleGroup2</td></tr>
-                    <tr><td>8</td><td>56881</td><td>2,479</td><td>SBUXSCRoleGroup6</td></tr>
-                </table>
-            </div>
-        </div>
-
-        <!-- MS58138 -->
-        <div id="ms58138" class="tab-content">
-            <div class="server-section" style="border-left-color: #4bc0c0;">
-                <h2 class="server-title">MS58138 - Archive Server (Oct 2025)</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    Time Range: Oct 14 - Oct 24, 2025 | 53 files | 195K lines | 794 stores | 45K disconnects
-                </p>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Top 10 Stores by Disconnect Count</h3>
-                <table>
-                    <tr><th>Rank</th><th>Store</th><th>Disconnects</th><th>Federation Group</th></tr>
-                    <tr><td>1</td><td class="highlight">00420</td><td>4,458</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>2</td><td>00439</td><td>4,457</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>3</td><td>00471</td><td>4,116</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>4</td><td>00458</td><td>3,365</td><td>SBUXSCRoleGroup1</td></tr>
-                    <tr><td>5</td><td>00587</td><td>3,158</td><td>SBUXSCRoleGroup2</td></tr>
-                </table>
-
-                <h3 style="color: var(--accent2); margin-top: 20px;">Longest Disconnection Times</h3>
-                <table>
-                    <tr><th>Store</th><th>Max</th><th>Avg</th><th>Count</th><th>Fed Group</th></tr>
-                    <tr><td>00246</td><td class="critical">12.1h</td><td>12.1h</td><td>1</td><td>SBUXSCRoleGroup0</td></tr>
-                    <tr><td>02252</td><td class="critical">12.0h</td><td>6.0h</td><td>2</td><td>SBUXSCRoleGroup4</td></tr>
-                    <tr><td>02670</td><td class="critical">11.9h</td><td>8.0h</td><td>3</td><td>SBUXSCRoleGroup6</td></tr>
-                    <tr><td>02938</td><td class="critical">11.2h</td><td>5.6h</td><td>2</td><td>SBUXSCRoleGroup8</td></tr>
-                </table>
-            </div>
-        </div>
-
-        <!-- Error Analysis -->
-        <div class="chart-container">
-            <h2 class="chart-title">Error Analysis by Server</h2>
-            <canvas id="errorChart"></canvas>
-        </div>
-
-        <footer style="text-align: center; color: var(--text-secondary); margin-top: 40px; padding: 20px;">
-            Generated by Federation Log Analyzer v3 (Streaming) | Multi-Server Analysis | 557M lines processed
-        </footer>
     </div>
 
     <script>
-        // Tab functionality
-        function showTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.target.classList.add('active');
-        }
-
-        // Server Comparison Bar Chart
-        new Chart(document.getElementById('serverComparisonChart'), {
-            type: 'bar',
+        // Daily Trend Chart
+        const dailyCtx = document.getElementById('dailyTrendChart').getContext('2d');
+        new Chart(dailyCtx, {
+            type: 'line',
             data: {
-                labels: ['MS63871', 'MS63870', 'MS563871', 'MS58138'],
+                labels: ['Jan 8', 'Jan 9', 'Jan 10', 'Jan 11', 'Jan 12', 'Jan 13', 'Jan 14', 'Jan 15', 'Jan 16'],
+                datasets: [
+                    {
+                        label: 'MS58187',
+                        data: [123, 6403, 7827, 8105, 3040, 8199, 263543, 1375890, 1085775],
+                        borderColor: '#e74c3c',
+                        backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'MS63780',
+                        data: [0, 0, 0, 0, 233015, 1434489, 1435086, 1436720, 1034144],
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'MS63868',
+                        data: [0, 0, 57, 962040, 1403255, 1397905, 1393628, 1397723, 1041384],
+                        borderColor: '#9b59b6',
+                        backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'MS63870',
+                        data: [79, 122967, 1434397, 1360631, 10274, 9138, 10184, 6765, 5474],
+                        borderColor: '#2ecc71',
+                        backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: { color: '#e8e8e8' }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#888' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    },
+                    y: {
+                        ticks: { color: '#888', callback: v => v >= 1000000 ? (v/1000000).toFixed(1) + 'M' : v >= 1000 ? (v/1000).toFixed(0) + 'K' : v },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    }
+                }
+            }
+        });
+
+        // Server Donut Chart
+        const serverCtx = document.getElementById('serverDonutChart').getContext('2d');
+        new Chart(serverCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['MS58187', 'MS63780', 'MS63868', 'MS63870'],
                 datasets: [{
-                    label: 'Disconnects (millions)',
-                    data: [6.93, 5.53, 0.126, 0.045],
-                    backgroundColor: ['#36a2eb', '#ff6384', '#ffce56', '#4bc0c0'],
+                    data: [2758905, 5573454, 7595992, 2959909],
+                    backgroundColor: ['#e74c3c', '#3498db', '#9b59b6', '#2ecc71'],
                     borderWidth: 0
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
-                    legend: { display: false },
-                    title: { display: true, text: 'Total Disconnects by Server (Millions)', color: '#eee' }
-                },
-                scales: {
-                    y: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
-                    x: { ticks: { color: '#aaa' }, grid: { color: '#333' } }
+                    legend: {
+                        position: 'bottom',
+                        labels: { color: '#e8e8e8', padding: 20 }
+                    }
                 }
             }
         });
 
-        // Server Pie Chart
-        new Chart(document.getElementById('serverPieChart'), {
-            type: 'doughnut',
+        // Error Type Chart
+        const errorCtx = document.getElementById('errorTypeChart').getContext('2d');
+        new Chart(errorCtx, {
+            type: 'pie',
             data: {
-                labels: ['MS63871 (55%)', 'MS63870 (44%)', 'MS563871 (1%)', 'MS58138 (<1%)'],
+                labels: ['Connection Failed', 'TLS/SSL Errors', 'Other Exceptions'],
                 datasets: [{
-                    data: [6930778, 5533679, 125925, 45369],
-                    backgroundColor: ['#36a2eb', '#ff6384', '#ffce56', '#4bc0c0'],
-                    borderWidth: 2,
-                    borderColor: '#1a1a2e'
+                    data: [301537, 18400, 51646],
+                    backgroundColor: ['#e74c3c', '#f39c12', '#9b59b6'],
+                    borderWidth: 0
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
-                    legend: { position: 'right', labels: { color: '#eee' } }
+                    legend: {
+                        position: 'bottom',
+                        labels: { color: '#e8e8e8', padding: 20 }
+                    }
                 }
             }
         });
 
-        // Daily Trend Chart
-        new Chart(document.getElementById('dailyTrendChart'), {
-            type: 'line',
-            data: {
-                labels: ['Dec 27', 'Dec 28', 'Dec 29', 'Dec 30', 'Dec 31', 'Jan 1', 'Jan 2', 'Jan 3', 'Jan 4', 'Jan 5', 'Jan 6', 'Jan 7', 'Jan 8', 'Jan 9', 'Jan 10', 'Jan 11'],
-                datasets: [{
-                    label: 'MS63870',
-                    data: [3508, 4642, 6269, 5858, 4547, 3690, 4340, 5571, 5173, 6015, 5989, 8113, 1240474, 1434446, 1434397, 1360647],
-                    borderColor: '#ff6384',
-                    fill: false,
-                    tension: 0.3
-                }, {
-                    label: 'MS63871',
-                    data: [0, 0, 0, 0, 0, 0, 0, 0, 89332, 556566, 262417, 1308879, 798684, 1333136, 1242647, 1339117],
-                    borderColor: '#36a2eb',
-                    fill: false,
-                    tension: 0.3
-                }, {
-                    label: 'MS563871',
-                    data: [0, 0, 0, 0, 552, 11825, 11055, 9989, 9454, 12016, 13315, 12630, 13566, 12480, 9438, 9605],
-                    borderColor: '#ffce56',
-                    fill: false,
-                    tension: 0.3
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { labels: { color: '#eee' } },
-                    title: { display: true, text: 'Disconnect Trend Over Time', color: '#eee' }
-                },
-                scales: {
-                    y: {
-                        ticks: { color: '#aaa', callback: v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(0)+'K' : v },
-                        grid: { color: '#333' }
-                    },
-                    x: { ticks: { color: '#aaa' }, grid: { color: '#333' } }
-                }
-            }
-        });
-
-        // Federation Group Comparison
-        new Chart(document.getElementById('fedGroupChart'), {
+        // Federation Groups Chart
+        const fedCtx = document.getElementById('fedGroupChart').getContext('2d');
+        new Chart(fedCtx, {
             type: 'bar',
             data: {
-                labels: ['Group0', 'Group1', 'Group2', 'Group3', 'Group4', 'Group5', 'Group6', 'Group7', 'Group8', 'Group9'],
-                datasets: [{
-                    label: 'MS63870',
-                    data: [539888, 540471, 594993, 534926, 574936, 575220, 538069, 541396, 540635, 541773],
-                    backgroundColor: '#ff6384'
-                }, {
-                    label: 'MS63871',
-                    data: [665108, 686299, 700623, 698886, 687947, 712770, 712741, 684701, 700591, 681112],
-                    backgroundColor: '#36a2eb'
-                }, {
-                    label: 'MS563871',
-                    data: [1007, 20253, 4630, 2306, 20182, 2288, 42102, 2469, 19153, 11535],
-                    backgroundColor: '#ffce56'
-                }, {
-                    label: 'MS58138',
-                    data: [3013, 20336, 7547, 945, 1354, 6172, 1192, 737, 2203, 1870],
-                    backgroundColor: '#4bc0c0'
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { labels: { color: '#eee' } }
-                },
-                scales: {
-                    y: {
-                        stacked: false,
-                        ticks: { color: '#aaa', callback: v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(0)+'K' : v },
-                        grid: { color: '#333' }
+                labels: ['RoleGroup0', 'RoleGroup1', 'RoleGroup2', 'RoleGroup3', 'RoleGroup4', 'RoleGroup5', 'RoleGroup6', 'RoleGroup7', 'RoleGroup8', 'RoleGroup9'],
+                datasets: [
+                    {
+                        label: 'MS58187',
+                        data: [363676, 254793, 282618, 268712, 268891, 259604, 262232, 256197, 244763, 279824],
+                        backgroundColor: '#e74c3c'
                     },
-                    x: { ticks: { color: '#aaa' }, grid: { color: '#333' } }
-                }
-            }
-        });
-
-        // Error Analysis
-        new Chart(document.getElementById('errorChart'), {
-            type: 'bar',
-            data: {
-                labels: ['MS63870', 'MS63871', 'MS563871', 'MS58138'],
-                datasets: [{
-                    label: 'Connection Failed',
-                    data: [100764, 56139, 125925, 45369],
-                    backgroundColor: '#ff6384'
-                }, {
-                    label: 'TLS/SSL Errors',
-                    data: [197, 2365, 8330, 2548],
-                    backgroundColor: '#ffce56'
-                }, {
-                    label: 'Timeouts',
-                    data: [0, 0, 0, 14],
-                    backgroundColor: '#4bc0c0'
-                }]
+                    {
+                        label: 'MS63780',
+                        data: [583947, 546646, 565553, 541033, 564615, 579420, 544436, 546949, 544310, 545078],
+                        backgroundColor: '#3498db'
+                    },
+                    {
+                        label: 'MS63868',
+                        data: [777902, 766828, 747727, 795805, 760680, 783701, 712308, 706203, 812676, 732162],
+                        backgroundColor: '#9b59b6'
+                    },
+                    {
+                        label: 'MS63870',
+                        data: [294424, 290764, 310210, 283975, 311055, 305705, 291751, 290035, 288312, 288042],
+                        backgroundColor: '#2ecc71'
+                    }
+                ]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
-                    legend: { labels: { color: '#eee' } }
+                    legend: {
+                        labels: { color: '#e8e8e8' }
+                    }
                 },
                 scales: {
+                    x: {
+                        stacked: true,
+                        ticks: { color: '#888' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    },
                     y: {
                         stacked: true,
-                        ticks: { color: '#aaa', callback: v => v >= 1000 ? (v/1000).toFixed(0)+'K' : v },
-                        grid: { color: '#333' }
+                        ticks: { color: '#888', callback: v => (v/1000000).toFixed(1) + 'M' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    }
+                }
+            }
+        });
+
+        // Peak Hours Chart
+        const peakCtx = document.getElementById('peakHoursChart').getContext('2d');
+        new Chart(peakCtx, {
+            type: 'bar',
+            data: {
+                labels: ['Jan 10 00:00', 'Jan 10 01:00', 'Jan 10 12:00', 'Jan 10 21:00', 'Jan 11 18:00', 'Jan 11 21:00', 'Jan 16 00:00', 'Jan 16 01:00', 'Jan 16 02:00', 'Jan 16 03:00'],
+                datasets: [{
+                    label: 'Disconnects',
+                    data: [60033, 60045, 59900, 59923, 59769, 59886, 67272, 67251, 66661, 68348],
+                    backgroundColor: 'rgba(0, 212, 255, 0.7)',
+                    borderColor: '#00d4ff',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#888', maxRotation: 45 },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
                     },
-                    x: { stacked: true, ticks: { color: '#aaa' }, grid: { color: '#333' } }
+                    y: {
+                        ticks: { color: '#888', callback: v => (v/1000).toFixed(0) + 'K' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    }
                 }
             }
         });
